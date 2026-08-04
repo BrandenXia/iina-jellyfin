@@ -26,7 +26,7 @@ global.onMessage('create-player', (data, player) => {
     const playerId = global.createPlayerInstance({
       url: url,
       label: `jellyfin-${Date.now()}`, // Unique label
-      enablePlugins: false, // Disable other plugins for cleaner experience
+      enablePlugins: true, // Disable other plugins for cleaner experience
       disableWindowAnimation: false, // Keep animations for better UX
     });
 
