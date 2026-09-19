@@ -21,14 +21,39 @@ const {
   sidebar,
   global,
   standaloneWindow,
-  playlist,
 } = iina;
 
-let isReplacingPlayback = false; // Guard to prevent spurious stop reports during file switch
+// Guard to prevent spurious stop reports during a file switch. Stored as a
+// timestamp and expired after REPLACEMENT_GUARD_MS: if the expected end-file
+// never arrives (e.g. core.open failed), a stale guard must not swallow the
+// stop report of the next file that really does finish.
+let replacingPlaybackAt = 0;
+const REPLACEMENT_GUARD_MS = 10000;
+
+function markReplacingPlayback() {
+  replacingPlaybackAt = Date.now();
+}
+
+function consumeReplacementGuard() {
+  if (!replacingPlaybackAt) {
+    return false;
+  }
+
+  const age = Date.now() - replacingPlaybackAt;
+  replacingPlaybackAt = 0;
+
+  if (age > REPLACEMENT_GUARD_MS) {
+    debugLog(`Ignoring replacement guard set ${age}ms ago (expired)`);
+    return false;
+  }
+
+  return true;
+}
 
 const debugLog = createDebugLogger(preferences, console);
 
 const {
+  getClientIdentity,
   buildJellyfinHeaders,
   parseJellyfinUrl,
   isJellyfinUrl,
@@ -55,6 +80,7 @@ const {
 } = createServerSessionStore({
   preferences,
   sidebar,
+  standaloneWindow,
   log: debugLog,
 });
 
@@ -63,9 +89,7 @@ debugLog('Jellyfin Subtitles Plugin loaded');
 const {
   startPlaybackTracking,
   stopPlaybackTracking,
-  handlePlaybackPositionChange,
   handlePauseChange,
-  markAsWatched,
   getCurrentPlaybackSession,
 } = createPlaybackTrackingManager({
   core,
@@ -110,10 +134,28 @@ const {
 });
 
 /**
+ * Compare two Jellyfin base URLs by host and port, ignoring the scheme and any
+ * trailing slash, so http/https of the same server still count as one server.
+ */
+function isSameJellyfinHost(left, right) {
+  const hostOf = (url) =>
+    String(url || '')
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/.*$/, '')
+      .toLowerCase();
+
+  const leftHost = hostOf(left);
+  return leftHost.length > 0 && leftHost === hostOf(right);
+}
+
+/**
  * Handle file loaded event
  */
 function onFileLoaded(fileUrl) {
   debugLog(`File loaded: ${fileUrl}`);
+
+  // The first item of a queued list is playing now, so the rest can be added
+  flushPendingPlaylistQueue(fileUrl);
 
   // Stop any existing playback tracking from previous file
   stopPlaybackTracking();
@@ -132,17 +174,27 @@ function onFileLoaded(fileUrl) {
     if (preferences.get('use_connected_account')) {
       const session = getStoredJellyfinSession();
       if (session && session.accessToken) {
-        reportServerBase = session.serverUrl;
-        reportApiKey = session.accessToken;
-        debugLog(
-          `Connected-account mode: reporting as ${session.username || session.serverName} @ ${reportServerBase} (ignoring URL api_key)`
-        );
+        // Only the credentials may change, never the item id — reporting a
+        // URL's item to a different server would 404 on every request.
+        if (isSameJellyfinHost(session.serverUrl, jellyfinInfo.serverBase)) {
+          reportServerBase = session.serverUrl;
+          reportApiKey = session.accessToken;
+          debugLog(
+            `Connected-account mode: reporting as ${session.username || session.serverName} @ ${reportServerBase} (ignoring URL api_key)`
+          );
+        } else {
+          debugLog(
+            `Connected-account mode ON but the logged-in server (${session.serverUrl}) is not the one in the URL (${jellyfinInfo.serverBase}); using URL api_key`
+          );
+        }
       } else {
         debugLog('Connected-account mode ON but no logged-in server; falling back to URL api_key');
       }
-    } else {
+    } else if (preferences.get('auto_login_enabled')) {
       // Default behaviour: remember this URL's session for auto-login.
       storeJellyfinSession(jellyfinInfo.serverBase, jellyfinInfo.apiKey);
+    } else {
+      debugLog('Auto-login from Jellyfin URLs disabled, not storing the URL credentials');
     }
 
     // Start playback tracking for progress sync
@@ -178,25 +230,38 @@ function onFileLoaded(fileUrl) {
  * Show Jellyfin Browser - handles the case when no window is available
  */
 function showJellyfinBrowser() {
-  try {
-    debugLog('Attempting to show Jellyfin browser');
+  debugLog('Attempting to show Jellyfin browser');
 
-    // Try to show sidebar directly first
-    if (sidebar && sidebar.show) {
+  // The sidebar lives inside the player window, so it is only useful while that
+  // window is on screen. sidebar.show() cannot be used to detect that: it only
+  // throws while the window has never been loaded, and IINA keeps window.loaded
+  // true after the window is closed. Showing it then succeeds silently on an
+  // invisible window and the browser appears to do nothing until IINA restarts.
+  let windowAvailable = false;
+  try {
+    windowAvailable = Boolean(core.window && core.window.loaded && core.window.visible);
+  } catch (error) {
+    debugLog(`Could not read window state: ${error.message}`);
+  }
+
+  if (windowAvailable && sidebar && typeof sidebar.show === 'function') {
+    try {
       sidebar.show();
       debugLog('Sidebar shown successfully');
       return;
+    } catch (error) {
+      debugLog(`Direct sidebar.show() failed: ${error.message}`);
     }
-  } catch (error) {
-    debugLog(`Direct sidebar.show() failed: ${error.message}`);
-
-    // Check if we have stored session data that could be useful
-    const sessionData = getStoredJellyfinSession();
-
-    // Always open in standalone window when sidebar isn't available
-    debugLog('Opening Jellyfin browser in standalone window');
-    openJellyfinStandaloneWindow(sessionData);
+  } else {
+    debugLog(`No visible player window (windowAvailable=${windowAvailable}), using standalone`);
   }
+
+  // Sidebar missing or threw — fall back to a standalone window.
+  // Check if we have stored session data that could be useful.
+  const sessionData = getStoredJellyfinSession();
+
+  debugLog('Opening Jellyfin browser in standalone window');
+  openJellyfinStandaloneWindow(sessionData);
 }
 
 /**
@@ -209,20 +274,34 @@ function openJellyfinStandaloneWindow(sessionData) {
     // Load the same sidebar HTML in standalone window
     standaloneWindow.loadFile('src/ui/sidebar/index.html');
 
-    // Set window properties
-    standaloneWindow.setFrame({ x: 100, y: 100, width: 400, height: 600 });
-    standaloneWindow.setProperty('title', 'Jellyfin Browser');
-    standaloneWindow.setProperty('resizable', true);
-    standaloneWindow.setProperty('minimizable', true);
+    // Set window properties. setFrame takes four numbers (width, height, x, y)
+    // and setProperty a single object; anything else is silently ignored.
+    standaloneWindow.setFrame(400, 600, 100, 100);
+    standaloneWindow.setProperty({ title: 'Jellyfin Browser', resizable: true });
 
-    // Set up message handlers for standalone window
+    // Set up message handlers for standalone window.
+    // These must be registered after every loadFile() call and cannot be
+    // hoisted out of this function: standaloneWindow.loadFile() clears the
+    // window's message listeners (JavascriptAPIStandaloneWindow.loadFile ->
+    // messageHub.clearListeners), which would leave the webview unable to
+    // reach the plugin at all. Re-registering is safe because the message hub
+    // keys listeners by name and replaces the previous callback.
+    standaloneWindow.onMessage('get-client-identity', () => {
+      standaloneWindow.postMessage('client-identity', getClientIdentity());
+    });
+
     standaloneWindow.onMessage('get-session', () => {
-      standaloneWindow.postMessage('session-data', sessionData);
+      standaloneWindow.postMessage('session-data', getStoredJellyfinSession());
     });
 
     standaloneWindow.onMessage('play-media', (data) => {
       handlePlayMedia(data);
       // Close standalone window after starting playback
+      standaloneWindow.close();
+    });
+
+    standaloneWindow.onMessage('play-media-list', (data) => {
+      handlePlayMediaList(data);
       standaloneWindow.close();
     });
 
@@ -258,12 +337,8 @@ function openJellyfinStandaloneWindow(sessionData) {
 
     standaloneWindow.onMessage('remove-server', (data) => {
       if (data && data.serverId) {
+        // The store notifies both webviews itself
         removeServer(data.serverId);
-        // Also notify standalone window (removeServer only notifies sidebar)
-        standaloneWindow.postMessage('servers-updated', {
-          servers: loadStoredServers(),
-          activeServerId: getActiveServerId(),
-        });
       }
     });
 
@@ -289,6 +364,7 @@ function openJellyfinStandaloneWindow(sessionData) {
 
     // Send session data after a brief delay
     setTimeout(() => {
+      standaloneWindow.postMessage('client-identity', getClientIdentity());
       // Send multi-server list (sidebar will auto-connect to active server)
       const servers = loadStoredServers();
       const activeServerId = getActiveServerId();
@@ -321,9 +397,36 @@ menu.addItem(
     () => {
       showJellyfinBrowser();
     },
-    { keyBinding: 'Cmd+Shift+J' }
+    // mpv key binding format: Command is "Meta". Unknown modifier names are
+    // dropped silently, so "Cmd+Shift+J" would bind plain Shift+J and steal
+    // IINA's own "cycle subtitles backward" shortcut.
+    { keyBinding: 'Meta+Shift+j' }
   )
 );
+
+// Replies from the global entry are registered once at load. IINA has no off(),
+// and the reply can arrive at any time, so a per-request listener isn't possible.
+if (typeof global !== 'undefined' && global.onMessage) {
+  global.onMessage('player-created', (data) => {
+    debugLog('New player instance created', {
+      playerId: data?.playerId,
+      title: data?.title,
+      url: data?.url,
+    });
+    if (data?.title) {
+      core.osd(`Opened in new window: ${data.title}`);
+    }
+  });
+
+  global.onMessage('player-creation-failed', (data) => {
+    debugLog('Failed to create new player instance: ' + data?.error);
+    core.osd('Failed to open new window - opening in current window');
+    // Fallback to current window
+    if (data?.url) {
+      core.open(data.url);
+    }
+  });
+}
 
 /**
  * Open media in a new IINA instance
@@ -331,43 +434,130 @@ menu.addItem(
 function openInNewInstance(streamUrl, title) {
   if (typeof global !== 'undefined' && global.postMessage) {
     debugLog('Requesting new player instance from global entry');
-
-    // Listen for response from global entry
-    const messageHandler = (name, data) => {
-      if (name === 'player-created') {
-        debugLog('New player instance created', {
-          playerId: data?.playerId,
-          title: data?.title,
-          url: data?.url,
-        });
-        core.osd(`Opened in new window: ${data.title}`);
-      } else if (name === 'player-creation-failed') {
-        debugLog('Failed to create new player instance: ' + data.error);
-        core.osd('Failed to open new window - opening in current window');
-        // Fallback to current window
-        core.open(streamUrl);
-      }
-    };
-
-    // Set up temporary listener (IINA doesn't have off() so we use this pattern)
-    const originalHandler = global.onMessage;
-    global.onMessage = (name, callback) => {
-      if (name === 'player-created' || name === 'player-creation-failed') {
-        return messageHandler(name, callback);
-      }
-      return originalHandler?.call(global, name, callback);
-    };
-
-    // Request new instance creation
     global.postMessage('create-player', { url: streamUrl, title: title });
-
-    // Clean up listener after 5 seconds
-    setTimeout(() => {
-      global.onMessage = originalHandler;
-    }, 5000);
   } else {
     debugLog('Global entry not available, opening in current window');
     core.open(streamUrl);
+  }
+}
+
+/**
+ * Open media in the current window, replacing what is playing
+ */
+function openInCurrentWindow(streamUrl, title) {
+  debugLog('Opening media in current window: ' + streamUrl);
+
+  // Set replacement guard so end-file handler doesn't send spurious stop
+  if (getCurrentPlaybackSession()) {
+    markReplacingPlayback();
+  }
+
+  // Clear any previous playlist entries to prevent stale titles. IINA's
+  // playlist API has no clear(), so use mpv's own command — it drops every
+  // entry except the one currently playing, which core.open replaces below.
+  try {
+    mpv.command('playlist-clear', []);
+    // Reset autoplay state when starting new playback
+    clearQueuedFlag();
+  } catch (clearError) {
+    debugLog(`Could not clear playlist before opening: ${clearError.message}`);
+  }
+
+  // We use core.open instead of mpv.command('loadfile') because core.open
+  // properly triggers IINA's native lifecycle and sleep prevention checks.
+  // Set force-media-title BEFORE core.open so mpv uses it when loadfile runs.
+  if (title) {
+    mpv.set('force-media-title', title);
+  }
+  core.open(streamUrl);
+}
+
+// Items waiting to join the playlist behind the one currently being opened.
+let pendingPlaylistQueue = null;
+const PENDING_QUEUE_TTL_MS = 60000;
+
+/**
+ * Append the items held back by handlePlayMediaList. Called once the first item
+ * of the list has actually loaded, so mpv's replacing load cannot discard them.
+ */
+function flushPendingPlaylistQueue(fileUrl) {
+  if (!pendingPlaylistQueue) {
+    return;
+  }
+
+  const { items, at, itemId } = pendingPlaylistQueue;
+  pendingPlaylistQueue = null;
+
+  if (Date.now() - at > PENDING_QUEUE_TTL_MS) {
+    debugLog('Queued playlist items are stale, not appending them');
+    return;
+  }
+
+  // Make sure this is the file the list started with. IINA percent-encodes the
+  // URL, so compare on the item id rather than the whole string.
+  if (itemId && fileUrl && !String(fileUrl).includes(itemId)) {
+    debugLog(`Loaded file is not the queued list's first item (${itemId}), dropping the queue`);
+    return;
+  }
+
+  try {
+    // loadfile carries per-file options, so each queued entry keeps its own
+    // title instead of showing a raw URL in the playlist.
+    for (const item of items) {
+      const args = [item.streamUrl, 'append'];
+      if (item.title) {
+        args.push('-1', `force-media-title=${item.title}`);
+      }
+      mpv.command('loadfile', args);
+    }
+    debugLog(`Appended ${items.length} queued item(s) to the playlist`);
+  } catch (error) {
+    debugLog('Could not append queued items: ' + error);
+  }
+}
+
+/**
+ * Handle a request to play several items in order (e.g. a whole album).
+ * A playlist only exists within one window, so this always plays in the
+ * current window regardless of the open_in_new_window preference.
+ */
+function handlePlayMediaList(message) {
+  const items = (message?.items || []).filter((item) => item && item.streamUrl);
+  debugLog(`handlePlayMediaList called with ${items.length} playable item(s)`);
+
+  if (items.length === 0) {
+    debugLog('No playable items in list');
+    core.osd('Nothing to play');
+    return;
+  }
+
+  const [firstItem, ...queuedItems] = items;
+
+  try {
+    if (queuedItems.length > 0) {
+      core.osd(`Playing ${items.length} tracks, starting with: ${firstItem.title}`);
+    } else {
+      core.osd(`Opening: ${firstItem.title}`);
+    }
+
+    // The rest can only be appended once the first item has loaded. core.open()
+    // defers its mpv loadfile for network URLs while something is still
+    // playing (PlayerCore.open: it stores pendingUrl and closes the window
+    // first), and that load replaces the playlist — appending now would be
+    // wiped out a moment later.
+    // Playback URLs are /Videos/{id}/stream or /Audio/{id}/stream; /Items/ is
+    // still matched for links produced by earlier versions.
+    const firstItemId =
+      (String(firstItem.streamUrl).match(/\/(?:Items|Videos|Audio)\/([^/?]+)/) || [])[1] || null;
+    pendingPlaylistQueue =
+      queuedItems.length > 0 ? { items: queuedItems, at: Date.now(), itemId: firstItemId } : null;
+
+    openInCurrentWindow(firstItem.streamUrl, firstItem.title);
+
+    debugLog(`Holding ${queuedItems.length} item(s) until the first one loads`);
+  } catch (error) {
+    debugLog('Error playing media list: ' + error);
+    core.osd('Failed to play tracks');
   }
 }
 
@@ -392,32 +582,8 @@ function handlePlayMedia(message) {
       core.osd(`Opening in new window: ${title}`);
       openInNewInstance(streamUrl, title);
     } else {
-      debugLog('Opening media in current window: ' + streamUrl);
       core.osd(`Opening: ${title}`);
-
-      // Set replacement guard so end-file handler doesn't send spurious stop
-      if (getCurrentPlaybackSession()) {
-        isReplacingPlayback = true;
-      }
-
-      // Clear any previous playlist entries to prevent stale titles
-      try {
-        if (playlist && typeof playlist.clear === 'function') {
-          playlist.clear();
-        }
-        // Reset autoplay state when starting new playback
-        clearQueuedFlag();
-      } catch (clearError) {
-        debugLog(`Could not clear playlist before opening: ${clearError.message}`);
-      }
-
-      // We use core.open instead of mpv.command('loadfile') because core.open
-      // properly triggers IINA's native lifecycle and sleep prevention checks.
-      // Set force-media-title BEFORE core.open so mpv uses it when loadfile runs.
-      if (title) {
-        mpv.set('force-media-title', title);
-      }
-      core.open(streamUrl);
+      openInCurrentWindow(streamUrl, title);
     }
 
     debugLog('Successfully initiated media opening: ' + streamUrl);
@@ -425,29 +591,17 @@ function handlePlayMedia(message) {
     debugLog('Error opening media: ' + error);
     core.osd('Failed to open media');
 
-    // Fallback: copy to clipboard as backup
-    try {
-      if (typeof core !== 'undefined' && core.setClipboard) {
-        core.setClipboard(streamUrl);
-        core.osd('Error opening - URL copied to clipboard');
-      } else if (typeof utils !== 'undefined' && utils.setClipboard) {
-        utils.setClipboard(streamUrl);
-        core.osd('Error opening - URL copied to clipboard');
-      } else {
-        core.osd('Failed to open - check console for URL');
-      }
-    } catch (clipboardError) {
-      debugLog('Both open and clipboard failed: ' + clipboardError);
-      core.osd('Failed to open media - check console');
-    }
+    // No clipboard API is exposed to plugins, so the URL only goes to the log
+    debugLog(`URL that failed to open: ${streamUrl}`);
   }
 }
 
 // Event handlers
 event.on('iina.file-loaded', onFileLoaded);
 
-// Playback tracking events for Jellyfin progress sync
-event.on('mpv.time-pos.changed', handlePlaybackPositionChange);
+// Position is sampled by the playback tracking tick. IINA does not observe
+// mpv's time-pos property, so there is no mpv.time-pos.changed event to
+// subscribe to — it drives its own time display from a periodic timer.
 
 // Pause/unpause state sync
 event.on('mpv.pause.changed', handlePauseChange);
@@ -455,6 +609,7 @@ event.on('mpv.pause.changed', handlePauseChange);
 // Handle file ending (includes both natural end and replacement)
 event.on('mpv.end-file', () => {
   const queuedForAutoplay = isQueued();
+  const isReplacingPlayback = consumeReplacementGuard();
   debugLog(
     'mpv.end-file triggered, isReplacingPlayback=' +
       isReplacingPlayback +
@@ -464,7 +619,6 @@ event.on('mpv.end-file', () => {
   if (isReplacingPlayback) {
     // File is being replaced (e.g. episode transition) — don't send stop report
     debugLog('File replacement in progress, skipping stop report');
-    isReplacingPlayback = false;
     return;
   }
   if (queuedForAutoplay) {
@@ -477,14 +631,9 @@ event.on('mpv.end-file', () => {
   stopPlaybackTracking();
 });
 
-// Handle EOF reached — mark as watched if near end
-event.on('mpv.eof-reached', () => {
-  debugLog('End of file reached (eof-reached)');
-  const playbackSession = getCurrentPlaybackSession();
-  if (playbackSession && playbackSession.itemId) {
-    markAsWatched(playbackSession.serverBase, playbackSession.itemId, playbackSession.apiKey);
-  }
-});
+// Reaching the end marks the item watched from the playback tracking tick.
+// eof-reached is an mpv property, not an event, so there is no
+// mpv.eof-reached event to listen for.
 
 // Stop tracking when window closes
 event.on('iina.window-will-close', () => {
@@ -504,6 +653,13 @@ event.on('iina.window-loaded', () => {
 
   // Set up message handler for sidebar playback requests
   sidebar.onMessage('play-media', handlePlayMedia);
+  sidebar.onMessage('play-media-list', handlePlayMediaList);
+
+  // The webview cannot read preferences, so it asks for the shared Jellyfin
+  // client identity (device id + version) it must authenticate with.
+  sidebar.onMessage('get-client-identity', () => {
+    sidebar.postMessage('client-identity', getClientIdentity());
+  });
 
   // Handle session requests from sidebar (backward compatible)
   sidebar.onMessage('get-session', () => {
@@ -582,14 +738,9 @@ event.on('iina.window-loaded', () => {
     }
   });
 
-  // Also expose a global method for sidebar communication
-  global.playMedia = (streamUrl, title) => {
-    debugLog('Global playMedia called with:', streamUrl, title);
-    handlePlayMedia({ streamUrl, title });
-  };
-
   // Send initial server data to sidebar after a brief delay
   setTimeout(() => {
+    sidebar.postMessage('client-identity', getClientIdentity());
     const servers = loadStoredServers();
     const activeServerId = getActiveServerId();
     if (servers.length > 0) {

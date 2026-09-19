@@ -1,5 +1,25 @@
 window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) {
   return {
+    /**
+     * Take a ticket for a container before starting a request. Responses are
+     * rendered only while they hold the newest ticket, so a slow reply cannot
+     * overwrite fresher results (fast typing in search, flipping filters, ...).
+     */
+    nextRequestId(key) {
+      if (!this.requestIds) this.requestIds = {};
+      this.requestIds[key] = (this.requestIds[key] || 0) + 1;
+      return this.requestIds[key];
+    },
+
+    isLatestRequest(key, requestId) {
+      const current = this.requestIds ? this.requestIds[key] : undefined;
+      if (current !== requestId) {
+        debugLog(`Dropping stale ${key} response (#${requestId}, current #${current})`);
+        return false;
+      }
+      return true;
+    },
+
     showMainContent() {
       document.getElementById('mainContent').style.display = 'block';
       this.scrollToTop();
@@ -21,7 +41,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
 
@@ -33,7 +53,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           let optionsHtml = allOption;
 
           response.data.Items.forEach((genre) => {
-            optionsHtml += `<option value="${genre.Name}">${genre.Name}</option>`;
+            const genreName = this.escapeHtml(genre.Name);
+            optionsHtml += `<option value="${genreName}">${genreName}</option>`;
           });
 
           moviesGenreSelect.innerHTML = optionsHtml;
@@ -45,9 +66,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
     },
 
     hideMainContent() {
+      // Both helpers return to the media list by default; here the whole
+      // content area is going away, so they must not show it again.
+      this.hideEpisodeSelection(false);
+      this.hideAlbumTracks(false);
       document.getElementById('mainContent').style.display = 'none';
-      this.hideEpisodeSelection();
-      this.hideAlbumTracks();
     },
 
     /**
@@ -130,6 +153,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       debugLog('Loading recent items for user:', this.currentUser.Name);
       const recentList = document.getElementById('recentList');
       recentList.innerHTML = '<div class="loading">Loading recent items...</div>';
+      const requestId = this.nextRequestId('recent');
 
       try {
         const params = new URLSearchParams({
@@ -146,7 +170,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
 
@@ -155,6 +179,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         debugLog('Response data type:', typeof response.data);
         debugLog('Response data is array:', Array.isArray(response.data));
 
+        if (!this.isLatestRequest('recent', requestId)) return;
+
         if (response.data && Array.isArray(response.data)) {
           this.renderMediaList(response.data, recentList);
         } else {
@@ -162,6 +188,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         }
       } catch (error) {
         debugLog('Error loading recent items:', error);
+        if (!this.isLatestRequest('recent', requestId)) return;
         recentList.innerHTML = '<div class="error">Failed to load recent items</div>';
       }
     },
@@ -178,22 +205,26 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const container = document.getElementById('continueWatchingList');
       container.innerHTML = '<div class="loading">Loading...</div>';
+      const requestId = this.nextRequestId('continueWatching');
 
       try {
         const params = new URLSearchParams({
+          userId: this.currentUser.Id,
           Limit: 10,
           MediaTypes: 'Video',
           Fields:
             'Overview,UserData,RunTimeTicks,SeriesName,ProductionYear,ParentIndexNumber,IndexNumber,SeriesId,ImageTags,BackdropImageTags',
         });
 
-        const fullUrl = `${this.currentServer.url}/Users/${this.currentUser.Id}/Items/Resume?${params.toString()}`;
+        const fullUrl = `${this.currentServer.url}/UserItems/Resume?${params.toString()}`;
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
+
+        if (!this.isLatestRequest('continueWatching', requestId)) return;
 
         if (response.data && response.data.Items && response.data.Items.length > 0) {
           this.renderMediaList(response.data.Items, container);
@@ -202,6 +233,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         }
       } catch (error) {
         debugLog('Error loading continue watching:', error);
+        if (!this.isLatestRequest('continueWatching', requestId)) return;
         container.innerHTML = '<div class="error">Failed to load</div>';
       }
     },
@@ -211,6 +243,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const container = document.getElementById('nextUpList');
       container.innerHTML = '<div class="loading">Loading...</div>';
+      const requestId = this.nextRequestId('nextUp');
 
       try {
         const params = new URLSearchParams({
@@ -224,9 +257,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
+
+        if (!this.isLatestRequest('nextUp', requestId)) return;
 
         if (response.data && response.data.Items && response.data.Items.length > 0) {
           this.renderMediaList(response.data.Items, container);
@@ -235,6 +270,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         }
       } catch (error) {
         debugLog('Error loading next up:', error);
+        if (!this.isLatestRequest('nextUp', requestId)) return;
         container.innerHTML = '<div class="error">Failed to load</div>';
       }
     },
@@ -244,6 +280,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const container = document.getElementById('moviesList');
       container.innerHTML = '<div class="loading">Loading movies...</div>';
+      const requestId = this.nextRequestId('movies');
 
       try {
         const sortValue = document.getElementById('moviesSortSelect').value.split(',');
@@ -271,13 +308,15 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           params.append('Genres', genreValue);
         }
 
-        const fullUrl = `${this.currentServer.url}/Users/${this.currentUser.Id}/Items?${params.toString()}`;
+        const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
+
+        if (!this.isLatestRequest('movies', requestId)) return;
 
         if (response.data && response.data.Items && response.data.Items.length > 0) {
           this.renderMediaList(response.data.Items, container);
@@ -286,6 +325,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         }
       } catch (error) {
         debugLog('Error loading movies:', error);
+        if (!this.isLatestRequest('movies', requestId)) return;
         container.innerHTML = '<div class="error">Failed to load movies</div>';
       }
     },
@@ -295,6 +335,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const container = document.getElementById('seriesList');
       container.innerHTML = '<div class="loading">Loading series...</div>';
+      const requestId = this.nextRequestId('series');
 
       try {
         const sortValue = document.getElementById('seriesSortSelect').value.split(',');
@@ -322,13 +363,15 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           params.append('Genres', genreValue);
         }
 
-        const fullUrl = `${this.currentServer.url}/Users/${this.currentUser.Id}/Items?${params.toString()}`;
+        const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
+
+        if (!this.isLatestRequest('series', requestId)) return;
 
         if (response.data && response.data.Items && response.data.Items.length > 0) {
           this.renderMediaList(response.data.Items, container);
@@ -337,6 +380,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         }
       } catch (error) {
         debugLog('Error loading series:', error);
+        if (!this.isLatestRequest('series', requestId)) return;
         container.innerHTML = '<div class="error">Failed to load series</div>';
       }
     },
@@ -373,6 +417,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
 
       searchResults.innerHTML = '<div class="loading">Searching...</div>';
+      const requestId = this.nextRequestId('search');
 
       try {
         const params = new URLSearchParams({
@@ -386,9 +431,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
+
+        if (!this.isLatestRequest('search', requestId)) return;
 
         if (response.data && response.data.SearchHints) {
           this.renderSearchResults(response.data.SearchHints, searchResults);
@@ -397,6 +444,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         }
       } catch (error) {
         debugLog('Search error:', error);
+        if (!this.isLatestRequest('search', requestId)) return;
         searchResults.innerHTML = '<div class="error">Search failed</div>';
       }
     },
@@ -437,21 +485,21 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       if (item.Type === 'Episode') {
         if (item.ImageTags && item.ImageTags.Primary) {
-          return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&api_key=${token}`;
+          return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
         }
         if (item.SeriesId) {
-          return `${base}/Items/${item.SeriesId}/Images/Thumb?maxWidth=${maxWidth}&quality=90&api_key=${token}`;
+          return `${base}/Items/${item.SeriesId}/Images/Thumb?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
         }
       }
 
       if (item.ImageTags && item.ImageTags.Thumb) {
-        return `${base}/Items/${item.Id}/Images/Thumb?maxWidth=${maxWidth}&quality=90&api_key=${token}`;
+        return `${base}/Items/${item.Id}/Images/Thumb?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
       }
       if (item.ImageTags && item.ImageTags.Primary) {
-        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&api_key=${token}`;
+        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
       }
       if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&api_key=${token}`;
+        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&ApiKey=${token}`;
       }
       return null;
     },
@@ -479,8 +527,9 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       let subtitle = '';
       if (item.Type === 'Episode' && item.SeriesName) {
-        const season = item.ParentIndexNumber || '?';
-        const episode = item.IndexNumber || '?';
+        // ?? not ||: specials are season 0, and episode 0 exists too
+        const season = item.ParentIndexNumber ?? '?';
+        const episode = item.IndexNumber ?? '?';
         subtitle = `${item.SeriesName} - S${season}E${episode}`;
       } else if (item.Type === 'Series') {
         subtitle = 'TV Series';
@@ -496,7 +545,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const thumbHtml = thumbUrl
         ? `<div class="thumb-wrapper">
-           <img class="list-thumb" src="${thumbUrl}" loading="lazy" alt="" onerror="this.parentElement.classList.add('thumb-fallback'); this.style.display='none';" />
+           <img class="list-thumb" src="${this.escapeHtml(thumbUrl)}" loading="lazy" alt="" onerror="this.parentElement.classList.add('thumb-fallback'); this.style.display='none';" />
            <div class="play-overlay">&#9654;</div>
          </div>`
         : `<div class="thumb-wrapper thumb-fallback"><div class="play-overlay">&#9654;</div></div>`;
@@ -504,9 +553,9 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       itemEl.innerHTML = `
             ${thumbHtml}
             <div class="list-body">
-                <div class="media-title">${title}${year}</div>
-                ${subtitle ? `<div class="media-subtitle">${subtitle}</div>` : ''}
-                <div class="media-meta">${type}</div>
+                <div class="media-title">${this.escapeHtml(title)}${this.escapeHtml(year)}</div>
+                ${subtitle ? `<div class="media-subtitle">${this.escapeHtml(subtitle)}</div>` : ''}
+                <div class="media-meta">${this.escapeHtml(type)}</div>
                 <div class="media-actions">
                     <button class="button media-action-btn" data-action="select">
                         ${item.Type === 'Series' ? 'Browse Episodes' : item.Type === 'MusicAlbum' ? 'View Tracks' : 'Play'}
@@ -560,17 +609,17 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         const base = this.currentServer.url;
         const token = this.currentServer.accessToken;
         if (hint.ThumbImageTag && hint.ThumbImageItemId) {
-          thumbUrl = `${base}/Items/${hint.ThumbImageItemId}/Images/Thumb?maxWidth=160&quality=90&api_key=${token}`;
+          thumbUrl = `${base}/Items/${hint.ThumbImageItemId}/Images/Thumb?maxWidth=160&quality=90&ApiKey=${token}`;
         } else if (hint.PrimaryImageTag) {
-          thumbUrl = `${base}/Items/${hint.ItemId}/Images/Primary?maxWidth=160&quality=90&api_key=${token}`;
+          thumbUrl = `${base}/Items/${hint.ItemId}/Images/Primary?maxWidth=160&quality=90&ApiKey=${token}`;
         } else if (hint.BackdropImageTag && hint.BackdropImageItemId) {
-          thumbUrl = `${base}/Items/${hint.BackdropImageItemId}/Images/Backdrop?maxWidth=320&quality=90&api_key=${token}`;
+          thumbUrl = `${base}/Items/${hint.BackdropImageItemId}/Images/Backdrop?maxWidth=320&quality=90&ApiKey=${token}`;
         }
       }
 
       const thumbHtml = thumbUrl
         ? `<div class="thumb-wrapper">
-           <img class="list-thumb" src="${thumbUrl}" loading="lazy" alt="" onerror="this.parentElement.classList.add('thumb-fallback'); this.style.display='none';" />
+           <img class="list-thumb" src="${this.escapeHtml(thumbUrl)}" loading="lazy" alt="" onerror="this.parentElement.classList.add('thumb-fallback'); this.style.display='none';" />
            <div class="play-overlay">&#9654;</div>
          </div>`
         : `<div class="thumb-wrapper thumb-fallback"><div class="play-overlay">&#9654;</div></div>`;
@@ -578,8 +627,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       itemEl.innerHTML = `
             ${thumbHtml}
             <div class="list-body">
-                <div class="media-title">${title}${year}</div>
-                <div class="media-meta">${type}</div>
+                <div class="media-title">${this.escapeHtml(title)}${this.escapeHtml(year)}</div>
+                <div class="media-meta">${this.escapeHtml(type)}</div>
                 <div class="media-actions">
                     <button class="button search-action-btn" data-action="select">
                         ${hint.Type === 'Series' ? 'Browse Episodes' : hint.Type === 'MusicAlbum' ? 'View Tracks' : 'Play'}
@@ -631,7 +680,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       this.selectedItem = item;
 
       document.querySelectorAll('.media-item').forEach((el) => el.classList.remove('selected'));
-      document.querySelector(`[data-item-id="${item.Id}"]`).classList.add('selected');
+      // The item is not always on screen (e.g. selected from search results)
+      const selectedEl = document.querySelector(`[data-item-id="${item.Id}"]`);
+      if (selectedEl) {
+        selectedEl.classList.add('selected');
+      }
 
       if (item.Type === 'Series') {
         debugLog('Item is a Series, showing episode selection');
@@ -655,7 +708,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           `${this.currentServer.url}/Items/${hint.ItemId}?${params.toString()}`,
           {
             headers: {
-              'X-Emby-Token': this.currentServer.accessToken,
+              Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
             },
           }
         );
@@ -664,8 +717,13 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           this.selectMediaItem(response.data);
         }
       } catch (error) {
+        // The webview has no core API — iina here only exposes postMessage and
+        // onMessage — so report failures in the UI, not through an OSD.
         debugLog('Error getting item details:', error);
-        iina.core.osd('Failed to get item details');
+        const searchResults = document.getElementById('searchResults');
+        if (searchResults) {
+          searchResults.innerHTML = '<div class="error">Failed to open item</div>';
+        }
       }
     },
 
@@ -690,7 +748,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           `${this.currentServer.url}/Shows/${series.Id}/Seasons?${params.toString()}`,
           {
             headers: {
-              'X-Emby-Token': this.currentServer.accessToken,
+              Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
             },
           }
         );
@@ -724,6 +782,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const episodeList = document.getElementById('episodeList');
       episodeList.innerHTML = '<div class="loading">Loading episodes...</div>';
+      const requestId = this.nextRequestId('episodes');
 
       try {
         const params = new URLSearchParams({
@@ -737,10 +796,12 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           `${this.currentServer.url}/Shows/${this.selectedItem.Id}/Episodes?${params.toString()}`,
           {
             headers: {
-              'X-Emby-Token': this.currentServer.accessToken,
+              Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
             },
           }
         );
+
+        if (!this.isLatestRequest('episodes', requestId)) return;
 
         if (response.data && response.data.Items) {
           episodeList.innerHTML = '';
@@ -752,7 +813,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
             episodeEl.dataset.episodeId = episode.Id;
             episodeEl.dataset.available = isAvailable.toString();
 
-            const episodeNum = episode.IndexNumber || '?';
+            const episodeNum = episode.IndexNumber ?? '?';
             const title = episode.Name || `Episode ${episodeNum}`;
             const duration = this.formatRuntime(episode.RunTimeTicks);
 
@@ -761,15 +822,15 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
               const base = this.currentServer.url;
               const token = this.currentServer.accessToken;
               if (episode.ImageTags && episode.ImageTags.Primary) {
-                episodeThumbUrl = `${base}/Items/${episode.Id}/Images/Primary?maxWidth=120&quality=90&api_key=${token}`;
+                episodeThumbUrl = `${base}/Items/${episode.Id}/Images/Primary?maxWidth=120&quality=90&ApiKey=${token}`;
               } else if (this.selectedItem && this.selectedItem.Id) {
-                episodeThumbUrl = `${base}/Items/${this.selectedItem.Id}/Images/Thumb?maxWidth=120&quality=90&api_key=${token}`;
+                episodeThumbUrl = `${base}/Items/${this.selectedItem.Id}/Images/Thumb?maxWidth=120&quality=90&ApiKey=${token}`;
               }
             }
 
             const episodeThumbHtml = episodeThumbUrl
               ? `<div class="ep-thumb-wrapper">
-                 <img class="ep-thumb" src="${episodeThumbUrl}" loading="lazy" alt="" onerror="this.parentElement.classList.add('thumb-fallback'); this.style.display='none';" />
+                 <img class="ep-thumb" src="${this.escapeHtml(episodeThumbUrl)}" loading="lazy" alt="" onerror="this.parentElement.classList.add('thumb-fallback'); this.style.display='none';" />
                </div>`
               : `<div class="ep-thumb-wrapper thumb-fallback"></div>`;
 
@@ -780,7 +841,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
             episodeEl.innerHTML = `
             ${episodeThumbHtml}
             <div class="ep-body">
-              <span class="ep-title">${episodeNum}. ${title}${availabilityIcon}</span>
+              <span class="ep-title">${this.escapeHtml(episodeNum)}. ${this.escapeHtml(title)}${availabilityIcon}</span>
             </div>
             ${duration ? `<span class="ep-duration">${duration}</span>` : ''}
           `;
@@ -807,6 +868,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         }
       } catch (error) {
         debugLog('Error loading episodes:', error);
+        if (!this.isLatestRequest('episodes', requestId)) return;
         episodeList.innerHTML = '<div class="error">Failed to load episodes</div>';
       }
     },
@@ -828,9 +890,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
     },
 
-    hideEpisodeSelection() {
+    hideEpisodeSelection(returnToMain = true) {
       document.getElementById('episodeSection').style.display = 'none';
-      document.getElementById('mainContent').style.display = 'block';
+      if (returnToMain) {
+        document.getElementById('mainContent').style.display = 'block';
+      }
       this.selectedEpisode = null;
       this.selectedSeason = null;
       document.getElementById('playEpisodeBtn').disabled = true;
@@ -876,12 +940,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
         debugLog('Successfully sent open-external-url message to IINA');
       } catch (error) {
-        debugLog('Error in openInJellyfin:', error);
-
-        const errorMessage = `Failed to open Jellyfin page: ${error.message}`;
-        if (typeof iina !== 'undefined' && iina.core && iina.core.osd) {
-          iina.core.osd(errorMessage);
-        }
+        // No core API in the webview; the plugin shows the OSD for this action
+        debugLog(`Failed to open Jellyfin page: ${error.message}`);
       }
     },
 
@@ -897,24 +957,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           return false;
         }
 
-        const hasValidPath = episode.MediaSources.some((source) => {
-          return source.Path && source.Path.trim() !== '';
-        });
-
-        if (!hasValidPath) {
-          debugLog(`Episode ${episode.Name} has no valid media paths`);
-          return false;
-        }
-
-        if (!episode.Path || episode.Path.trim() === '') {
-          debugLog(`Episode ${episode.Name} has no direct path`);
-          return false;
-        }
-
-        if (episode.CanDownload === false) {
-          debugLog(`Episode ${episode.Name} marked as not downloadable`);
-          return false;
-        }
+        // Filesystem paths are deliberately not checked: Jellyfin withholds
+        // Path from non-admin accounts, and an episode that is playable by
+        // streaming does not need one. LocationType and MediaSources already
+        // say whether the file exists on the server, which is the same test
+        // the autoplay manager uses.
 
         if (episode.IsFolder === true) {
           debugLog(`Episode ${episode.Name} marked as folder`);
@@ -934,6 +981,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const container = document.getElementById('musicList');
       container.innerHTML = '<div class="loading">Loading music...</div>';
+      const requestId = this.nextRequestId('music');
 
       try {
         const viewMode = document.getElementById('musicViewSelect').value;
@@ -941,19 +989,20 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         const genreValue = document.getElementById('musicGenreSelect').value;
 
         if (viewMode === 'artists') {
-          await this.loadMusicArtists(container, sortValue, genreValue);
+          await this.loadMusicArtists(container, sortValue, genreValue, requestId);
         } else if (viewMode === 'songs') {
-          await this.loadMusicSongs(container, sortValue, genreValue);
+          await this.loadMusicSongs(container, sortValue, genreValue, requestId);
         } else {
-          await this.loadMusicAlbums(container, sortValue, genreValue);
+          await this.loadMusicAlbums(container, sortValue, genreValue, requestId);
         }
       } catch (error) {
         debugLog('Error loading music:', error);
+        if (!this.isLatestRequest('music', requestId)) return;
         container.innerHTML = '<div class="error">Failed to load music</div>';
       }
     },
 
-    async loadMusicAlbums(container, sortValue, genreValue) {
+    async loadMusicAlbums(container, sortValue, genreValue, requestId) {
       const params = new URLSearchParams({
         userId: this.currentUser.Id,
         IncludeItemTypes: 'MusicAlbum',
@@ -970,13 +1019,15 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         params.append('Genres', genreValue);
       }
 
-      const fullUrl = `${this.currentServer.url}/Users/${this.currentUser.Id}/Items?${params.toString()}`;
+      const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
 
       const response = await this.getHttpClient().get(fullUrl, {
         headers: {
-          'X-Emby-Token': this.currentServer.accessToken,
+          Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
         },
       });
+
+      if (!this.isLatestRequest('music', requestId)) return;
 
       if (response.data && response.data.Items && response.data.Items.length > 0) {
         this.renderMusicList(response.data.Items, container, 'album');
@@ -985,7 +1036,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
     },
 
-    async loadMusicArtists(container, sortValue, genreValue) {
+    async loadMusicArtists(container, sortValue, genreValue, requestId) {
       const params = new URLSearchParams({
         userId: this.currentUser.Id,
         SortBy: sortValue[0],
@@ -1003,9 +1054,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const response = await this.getHttpClient().get(fullUrl, {
         headers: {
-          'X-Emby-Token': this.currentServer.accessToken,
+          Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
         },
       });
+
+      if (!this.isLatestRequest('music', requestId)) return;
 
       if (response.data && response.data.Items && response.data.Items.length > 0) {
         this.renderMusicList(response.data.Items, container, 'artist');
@@ -1014,7 +1067,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
     },
 
-    async loadMusicSongs(container, sortValue, genreValue) {
+    async loadMusicSongs(container, sortValue, genreValue, requestId) {
       const params = new URLSearchParams({
         userId: this.currentUser.Id,
         IncludeItemTypes: 'Audio',
@@ -1030,13 +1083,15 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         params.append('Genres', genreValue);
       }
 
-      const fullUrl = `${this.currentServer.url}/Users/${this.currentUser.Id}/Items?${params.toString()}`;
+      const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
 
       const response = await this.getHttpClient().get(fullUrl, {
         headers: {
-          'X-Emby-Token': this.currentServer.accessToken,
+          Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
         },
       });
+
+      if (!this.isLatestRequest('music', requestId)) return;
 
       if (response.data && response.data.Items && response.data.Items.length > 0) {
         this.renderMusicList(response.data.Items, container, 'song');
@@ -1058,7 +1113,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
 
@@ -1067,7 +1122,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           let optionsHtml = '<option value="all" selected>All Genres</option>';
 
           response.data.Items.forEach((genre) => {
-            optionsHtml += `<option value="${genre.Name}">${genre.Name}</option>`;
+            const genreName = this.escapeHtml(genre.Name);
+            optionsHtml += `<option value="${genreName}">${genreName}</option>`;
           });
 
           musicGenreSelect.innerHTML = optionsHtml;
@@ -1083,13 +1139,13 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       const token = this.currentServer.accessToken;
 
       if (item.ImageTags && item.ImageTags.Primary) {
-        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&api_key=${token}`;
+        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
       }
       if (item.AlbumId) {
-        return `${base}/Items/${item.AlbumId}/Images/Primary?maxWidth=${maxWidth}&quality=90&api_key=${token}`;
+        return `${base}/Items/${item.AlbumId}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
       }
       if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&api_key=${token}`;
+        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&ApiKey=${token}`;
       }
       return null;
     },
@@ -1140,7 +1196,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const thumbHtml = thumbUrl
         ? `<div class="album-thumb-wrapper">
-           <img class="album-thumb" src="${thumbUrl}" loading="lazy" alt="" onerror="this.parentElement.classList.add('thumb-fallback'); this.style.display='none'; this.parentElement.textContent='${fallbackIcon}';" />
+           <img class="album-thumb" src="${this.escapeHtml(thumbUrl)}" loading="lazy" alt="" onerror="this.parentElement.classList.add('thumb-fallback'); this.style.display='none'; this.parentElement.textContent='${fallbackIcon}';" />
          </div>`
         : `<div class="album-thumb-wrapper thumb-fallback">${fallbackIcon}</div>`;
 
@@ -1154,8 +1210,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       itemEl.innerHTML = `
         ${thumbHtml}
         <div class="list-body">
-          <div class="media-title">${title}</div>
-          ${subtitle ? `<div class="media-subtitle">${subtitle}</div>` : ''}
+          <div class="media-title">${this.escapeHtml(title)}</div>
+          ${subtitle ? `<div class="media-subtitle">${this.escapeHtml(subtitle)}</div>` : ''}
           <div class="media-actions">
             <button class="button media-action-btn" data-action="select">${actionLabel}</button>
             <button class="button secondary media-action-btn" data-action="open-jellyfin">Jellyfin</button>
@@ -1207,6 +1263,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const container = document.getElementById('musicList');
       container.innerHTML = '<div class="loading">Loading albums...</div>';
+      const requestId = this.nextRequestId('music');
 
       try {
         const params = new URLSearchParams({
@@ -1221,21 +1278,24 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           Limit: 50,
         });
 
-        const fullUrl = `${this.currentServer.url}/Users/${this.currentUser.Id}/Items?${params.toString()}`;
+        const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
+
+        if (!this.isLatestRequest('music', requestId)) return;
 
         if (response.data && response.data.Items && response.data.Items.length > 0) {
           this.renderMusicList(response.data.Items, container, 'album');
         } else {
-          container.innerHTML = `<div class="empty-state">No albums found for ${artist.Name}</div>`;
+          container.innerHTML = `<div class="empty-state">No albums found for ${this.escapeHtml(artist.Name)}</div>`;
         }
       } catch (error) {
         debugLog('Error loading artist albums:', error);
+        if (!this.isLatestRequest('music', requestId)) return;
         container.innerHTML = '<div class="error">Failed to load albums</div>';
       }
     },
@@ -1255,6 +1315,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       const tracksList = document.getElementById('albumTracksList');
       tracksList.innerHTML = '<div class="loading">Loading tracks...</div>';
+      const requestId = this.nextRequestId('albumTracks');
 
       try {
         const params = new URLSearchParams({
@@ -1266,13 +1327,15 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           IncludeItemTypes: 'Audio',
         });
 
-        const fullUrl = `${this.currentServer.url}/Users/${this.currentUser.Id}/Items?${params.toString()}`;
+        const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
 
         const response = await this.getHttpClient().get(fullUrl, {
           headers: {
-            'X-Emby-Token': this.currentServer.accessToken,
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
+
+        if (!this.isLatestRequest('albumTracks', requestId)) return;
 
         if (response.data && response.data.Items && response.data.Items.length > 0) {
           this.albumTracks = response.data.Items;
@@ -1283,6 +1346,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         }
       } catch (error) {
         debugLog('Error loading album tracks:', error);
+        if (!this.isLatestRequest('albumTracks', requestId)) return;
         tracksList.innerHTML = '<div class="error">Failed to load tracks</div>';
       }
     },
@@ -1301,10 +1365,10 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         const artists = track.Artists?.join(', ') || track.AlbumArtist || '';
 
         trackEl.innerHTML = `
-          <span class="track-number">${trackNum}</span>
+          <span class="track-number">${this.escapeHtml(trackNum)}</span>
           <div class="track-body">
-            <span class="track-title">${title}</span>
-            ${artists ? `<span class="track-artist">${artists}</span>` : ''}
+            <span class="track-title">${this.escapeHtml(title)}</span>
+            ${artists ? `<span class="track-artist">${this.escapeHtml(artists)}</span>` : ''}
           </div>
           ${duration ? `<span class="track-duration">${duration}</span>` : ''}
         `;
@@ -1326,10 +1390,27 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         return;
       }
 
-      debugLog('Playing all album tracks, count:', this.albumTracks.length);
-      // Play first track, subsequent tracks will need to be handled by IINA's playlist
-      const firstTrack = this.albumTracks[0];
-      this.playMedia(firstTrack);
+      const items = this.albumTracks
+        .map((track) => ({
+          streamUrl: this.buildStreamUrl(track),
+          title: track.Name || 'Unknown Title',
+        }))
+        .filter((item) => item.streamUrl);
+
+      if (items.length === 0) {
+        debugLog('No playable album tracks');
+        return;
+      }
+
+      debugLog('Playing all album tracks, count:', items.length);
+
+      if (typeof iina !== 'undefined' && iina.postMessage) {
+        // The plugin plays the first track and appends the rest to the playlist
+        iina.postMessage('play-media-list', { items });
+      } else {
+        debugLog('iina.postMessage not available, playing the first track only');
+        this.playMedia(this.albumTracks[0]);
+      }
     },
 
     openAlbumInJellyfin() {
@@ -1338,9 +1419,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
     },
 
-    hideAlbumTracks() {
+    hideAlbumTracks(returnToMain = true) {
       document.getElementById('albumTracksSection').style.display = 'none';
-      document.getElementById('mainContent').style.display = 'block';
+      if (returnToMain) {
+        document.getElementById('mainContent').style.display = 'block';
+      }
       this.selectedAlbum = null;
       this.selectedTrack = null;
       this.albumTracks = [];
@@ -1349,10 +1432,26 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       document.getElementById('openAlbumInJellyfinBtn').disabled = true;
     },
 
+    /**
+     * Build a direct-play URL. The streaming routes are what Jellyfin's own
+     * clients use; /Items/{id}/Download additionally requires the account to
+     * have media download permission, which browsing does not.
+     * static=true asks for the original file without transcoding.
+     */
+    buildStreamUrl(item) {
+      if (!this.currentServer || !item || !item.Id) return null;
+      const route = item.Type === 'Audio' ? 'Audio' : 'Videos';
+      return `${this.currentServer.url}/${route}/${item.Id}/stream?static=true&ApiKey=${this.currentServer.accessToken}`;
+    },
+
     async playMedia(item) {
       debugLog('playMedia called with item type:', item.Type, 'name:', item.Name, 'id:', item.Id);
       try {
-        const streamUrl = `${this.currentServer.url}/Items/${item.Id}/Download?api_key=${this.currentServer.accessToken}`;
+        const streamUrl = this.buildStreamUrl(item);
+        if (!streamUrl) {
+          debugLog('Cannot build a stream URL: missing server or item id');
+          return;
+        }
         debugLog('Built download URL:', streamUrl);
         debugLog('Item details:', {
           Type: item.Type,
@@ -1373,18 +1472,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
             this.hideEpisodeSelection();
           }
         } else {
-          debugLog('iina.postMessage not available, trying global object');
-          if (typeof window !== 'undefined' && window.jellyfinPlugin) {
-            debugLog('Using window.jellyfinPlugin for communication');
-            if (window.jellyfinPlugin.playMedia) {
-              window.jellyfinPlugin.playMedia(streamUrl, item.Name || 'Unknown Title');
-            } else {
-              debugLog('window.jellyfinPlugin.playMedia not available');
-            }
-          } else {
-            debugLog('No communication method available, opening in new window');
-            window.open(streamUrl, '_blank');
-          }
+          debugLog('iina.postMessage not available, opening in a new window');
+          window.open(streamUrl, '_blank');
         }
       } catch (error) {
         debugLog('Error playing media:', error);
