@@ -1,6 +1,6 @@
 {
   "name": "iina-jellyfin",
-  "version": "0.7.3",
+  "version": "0.7.5",
   "description": "Jellyfin plugin for IINA, enabling seamless media playback and subtitle management.",
   "homepage": "https://github.com/mhajder/iina-jellyfin",
   "bugs": {
@@ -23,8 +23,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.10.0",
+    "eslint": "^10.12.0",
     "iina-plugin-definition": "^0.99.4",
-    "prettier": "^3.9.6"
+    "prettier": "^3.9.9"
   }
 }

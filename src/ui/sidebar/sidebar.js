@@ -5,9 +5,11 @@
 
 /**
  * Debug logging helper function
- * Only logs if debug logging is enabled in preferences
+ * Only logs if debug logging is enabled in preferences. The webview cannot read
+ * preferences, so the plugin sends the flag along with the client identity.
  */
 const MAX_DEBUG_LOG_LENGTH = 600;
+let debugLoggingEnabled = false;
 
 // Credentials travel in URLs (ApiKey=...) and in the MediaBrowser
 // Authorization header (Token="..."). Strip them from anything we log.
@@ -83,7 +85,7 @@ function serializeDebugArg(arg) {
 }
 
 function debugLog(...parts) {
-  if (iina?.preferences?.get?.('debug_logging')) {
+  if (debugLoggingEnabled) {
     console.log(`DEBUG: ${redactSecrets(parts.map(serializeDebugArg).join(' | '))}`);
   }
 }
@@ -344,6 +346,7 @@ class JellyfinSidebar {
   setupMessageHandlers() {
     if (typeof iina !== 'undefined' && iina.onMessage) {
       iina.onMessage('client-identity', (data) => {
+        debugLoggingEnabled = Boolean(data?.debugLogging);
         debugLog('Received client-identity: ' + JSON.stringify(data));
         this.handleClientIdentity(data);
       });
@@ -377,10 +380,7 @@ class JellyfinSidebar {
 
       iina.onMessage('server-switched', (data) => {
         debugLog('Received server-switched: ' + JSON.stringify(data));
-        if (data && data.server) {
-          this.handleServersList(data);
-          this.connectToServer(data.server);
-        }
+        this.handleServerSwitched(data);
       });
     } else {
       debugLog('iina.onMessage not available, session auto-login disabled');
