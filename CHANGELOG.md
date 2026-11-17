@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.9.1](https://github.com/mhajder/iina-jellyfin/compare/v0.9.0...v0.9.1) (2026-11-15)
+
+
+### 🐛 Bug Fixes
+
+* **autoplay:** keep the viewer's playlist and queue episodes in airing order ([69d1516](https://github.com/mhajder/iina-jellyfin/commit/69d15166691be211e1a4d36182563d37d04a9527))
+* encode API keys in request URLs and keep subpaths with media routes ([60978ec](https://github.com/mhajder/iina-jellyfin/commit/60978ecf12c5d19f7154d97abed508095582ca0c))
+* keep stored servers in step across browser views and played links ([4b6e8cf](https://github.com/mhajder/iina-jellyfin/commit/4b6e8cf2c7a76fde55dd7560fb027c0291cad704))
+* keep the standalone browser's size and position when reopened ([63b6155](https://github.com/mhajder/iina-jellyfin/commit/63b61557f131ffa16274918e4e0f6d0019a4f7db))
+* match subtitle languages across all of ISO 639-1 ([474a833](https://github.com/mhajder/iina-jellyfin/commit/474a833084c33528e4ba7a388c93bcf041d381f2))
+* resume re-watched items and keep tracking after a seek back from the end ([0521607](https://github.com/mhajder/iina-jellyfin/commit/0521607a42b4ed9f32a863e425c2e44f860effc3))
+* **sidebar:** hide series that have no episodes ([f16cb40](https://github.com/mhajder/iina-jellyfin/commit/f16cb4081bdf59c0cf2aa0d08c4c48335ac518b4))
+* **sidebar:** page long lists and show episodes and links correctly ([6829dec](https://github.com/mhajder/iina-jellyfin/commit/6829dec7031bf159068d459df23577061523a981))
+* **sidebar:** sign in, disconnect and switch servers without losing the wrong one ([f409baf](https://github.com/mhajder/iina-jellyfin/commit/f409baf60a21b28776f9dd6564195503533722a3))
+* stop applying a previous item's subtitles and title to other files ([86625df](https://github.com/mhajder/iina-jellyfin/commit/86625df88c15526adf28c182c0ecbd20af4bd500))
+
+
+### 🧩 CI
+
+* set Dependabot commit messages and group its updates ([c1da04f](https://github.com/mhajder/iina-jellyfin/commit/c1da04f5647f877e0f54f56c1b41233b34812ec6))
+
+## [0.9.0](https://github.com/mhajder/iina-jellyfin/compare/v0.8.0...v0.9.0) (2026-11-07)
+
+
+### 🚀 Features
+
+* add an "Always show subtitles" option ([#136](https://github.com/mhajder/iina-jellyfin/issues/136)) ([7eeb0d2](https://github.com/mhajder/iina-jellyfin/commit/7eeb0d2527173f6124c21a5d735ec63751914d07))
+
+
+### 🐛 Bug Fixes
+
+* bugs found by raising test coverage to 98% ([#138](https://github.com/mhajder/iina-jellyfin/issues/138)) ([97fdbd4](https://github.com/mhajder/iina-jellyfin/commit/97fdbd46c2483468860f593fb4b691528afcce3b))
+
+
+### 🧩 CI
+
+* pin actions to commit SHAs at latest versions ([#139](https://github.com/mhajder/iina-jellyfin/issues/139)) ([c2d2850](https://github.com/mhajder/iina-jellyfin/commit/c2d2850145962257ce03223c042243d4f08aa478))
+* queue release runs instead of cancelling them ([fa2879b](https://github.com/mhajder/iina-jellyfin/commit/fa2879b01e16b33a819dfd4be46291f1e669b1c7))
+* replace softprops/action-gh-release with the gh CLI ([db7e972](https://github.com/mhajder/iina-jellyfin/commit/db7e97217f5a83f9478237dc4c8a653e11f8d6eb))
+
+
+### 📦 Build
+
+* add typos pre-commit hook ([680605d](https://github.com/mhajder/iina-jellyfin/commit/680605dffa2e7fac7af673a155a933062aeab427))
+
+## [0.8.0](https://github.com/mhajder/iina-jellyfin/compare/v0.7.5...v0.8.0) (2026-11-01)
+
+
+### 🚀 Features
+
+* select preferred-language tracks on play ([#131](https://github.com/mhajder/iina-jellyfin/issues/131)) ([581ebd6](https://github.com/mhajder/iina-jellyfin/commit/581ebd696810fcb45f43bda3e382850c53f297f6))
+* switch between Jellyfin media versions during playback ([#133](https://github.com/mhajder/iina-jellyfin/issues/133)) ([9bfdafc](https://github.com/mhajder/iina-jellyfin/commit/9bfdafcde89378e652432d97f7024668c65c35ed)), closes [#8](https://github.com/mhajder/iina-jellyfin/issues/8)
+
+
+### 🐛 Bug Fixes
+
+* load the viewer's other plugins in new Jellyfin windows ([#134](https://github.com/mhajder/iina-jellyfin/issues/134)) ([8b5ffbe](https://github.com/mhajder/iina-jellyfin/commit/8b5ffbe5ec21dd1d528ab0ab939d3dd13b16c8e6))
+* rank preferred-language tracks and stop forcing subtitles on ([#132](https://github.com/mhajder/iina-jellyfin/issues/132)) ([e87c01d](https://github.com/mhajder/iina-jellyfin/commit/e87c01df09a8b94da3019d4cb44e8266800d6acc))
+
+
+### 📚 Documentation
+
+* add security policy and contributing guide, refresh README ([#126](https://github.com/mhajder/iina-jellyfin/issues/126)) ([b013a78](https://github.com/mhajder/iina-jellyfin/commit/b013a78c82f28ca5d6624c55acdc1dbe97f669af))
+* refresh the help and preferences pages ([#135](https://github.com/mhajder/iina-jellyfin/issues/135)) ([0069f7d](https://github.com/mhajder/iina-jellyfin/commit/0069f7d1b66e973d3c234215214336d3f7c32647))
+
+
+### 🧩 CI
+
+* release with the default GITHUB_TOKEN ([#128](https://github.com/mhajder/iina-jellyfin/issues/128)) ([2f02721](https://github.com/mhajder/iina-jellyfin/commit/2f02721b9bd52481e8e502b176a5acb7e7adcead))
+* run the checks on pnpm 12 and Node.js 26 ([#129](https://github.com/mhajder/iina-jellyfin/issues/129)) ([02a0558](https://github.com/mhajder/iina-jellyfin/commit/02a0558f3de39b4802a8d2146bb762ba3112e111))
+
 ## [0.7.5](https://github.com/mhajder/iina-jellyfin/compare/v0.7.4...v0.7.5) (2026-10-11)
 
 

@@ -1,7 +1,7 @@
 {
   "name": "Jellyfin",
   "identifier": "com.mhajder.iina-jellyfin",
-  "version": "0.7.5",
+  "version": "0.9.1",
   "description": "Jellyfin plugin for IINA, enabling seamless media playback and subtitle management.",
   "author": {
     "name": "Mateusz Hajder",
@@ -25,6 +25,8 @@
   },
   "preferenceDefaults": {
     "auto_download_enabled": true,
+    "select_preferred_tracks": true,
+    "subtitles_always_on": false,
     "preferred_languages": "en,eng",
     "download_all_subtitles": false,
     "show_notifications": false,
@@ -37,5 +39,5 @@
     "use_connected_account": false
   },
   "ghRepo": "mhajder/iina-jellyfin",
-  "ghVersion": 15
+  "ghVersion": 18
 }

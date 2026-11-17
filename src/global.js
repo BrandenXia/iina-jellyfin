@@ -3,6 +3,8 @@
  * Handles creating new player instances for separate windows
  */
 
+'use strict';
+
 const { createDebugLogger } = require('./lib/debug-log.js');
 
 const { global, console, preferences } = iina;
@@ -26,7 +28,10 @@ global.onMessage('create-player', (data, player) => {
     const playerId = global.createPlayerInstance({
       url: url,
       label: `jellyfin-${Date.now()}`, // Unique label
-      enablePlugins: false, // Disable other plugins for cleaner experience
+      // With false, IINA loads only this plugin in the new window, so the
+      // viewer's other plugins (subtitle search, user scripts...) would be
+      // missing from every Jellyfin video opened in a new window.
+      enablePlugins: true,
       disableWindowAnimation: false, // Keep animations for better UX
     });
 
@@ -48,6 +53,8 @@ global.onMessage('create-player', (data, player) => {
       global.postMessage(player, 'player-creation-failed', {
         error: error.toString(),
         url: data?.url,
+        // The requester falls back to its own window and needs the title.
+        title: data?.title,
       });
     }
   }

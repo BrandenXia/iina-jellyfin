@@ -1,4 +1,7 @@
 window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) {
+  // Items per request in the paged lists (movies, series, music)
+  const PAGE_SIZE = 50;
+
   return {
     /**
      * Take a ticket for a container before starting a request. Responses are
@@ -20,7 +23,21 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       return true;
     },
 
+    /**
+     * Move every ticket on so no reply to a request already in flight is
+     * rendered. Requests started afterwards take fresh tickets.
+     */
+    invalidatePendingRequests() {
+      if (!this.requestIds) return;
+      for (const key of Object.keys(this.requestIds)) {
+        this.requestIds[key]++;
+      }
+    },
+
     showMainContent() {
+      // Called once a login or server switch succeeds: anything still in
+      // flight was asked of the previous server or session.
+      this.invalidatePendingRequests();
       document.getElementById('mainContent').style.display = 'block';
       this.scrollToTop();
       this.loadGenres();
@@ -29,6 +46,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
     async loadGenres() {
       if (!this.currentServer || !this.currentUser) return;
+      const requestId = this.nextRequestId('genres');
 
       try {
         const params = new URLSearchParams({
@@ -44,6 +62,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
             Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
+
+        if (!this.isLatestRequest('genres', requestId)) return;
 
         if (response.data && response.data.Items) {
           const moviesGenreSelect = document.getElementById('moviesGenreSelect');
@@ -79,6 +99,10 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
      * stale content from a previous server being visible on reconnect.
      */
     clearAllMediaContent() {
+      // Requests still in flight belong to the previous server or session:
+      // none of their replies may be rendered.
+      this.invalidatePendingRequests();
+
       // Reset selection state
       this.selectedItem = null;
       this.selectedSeason = null;
@@ -275,27 +299,42 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
     },
 
-    async loadMovies() {
+    loadMovies(startIndex = 0, button = null) {
+      return this.loadLibraryPage('movies', 'Movie', startIndex, button);
+    },
+
+    loadSeries(startIndex = 0, button = null) {
+      return this.loadLibraryPage('series', 'Series', startIndex, button);
+    },
+
+    /**
+     * One page of the Movies or Series tab, by its filters. Page 1 replaces
+     * the list; later pages come from its "Load more" button.
+     */
+    async loadLibraryPage(section, itemType, startIndex, button) {
       if (!this.currentServer || !this.currentUser) return;
 
-      const container = document.getElementById('moviesList');
-      container.innerHTML = '<div class="loading">Loading movies...</div>';
-      const requestId = this.nextRequestId('movies');
+      const container = document.getElementById(`${section}List`);
+      if (!button) container.innerHTML = `<div class="loading">Loading ${section}...</div>`;
+      const requestId = this.pageRequestId(section, button);
 
       try {
-        const sortValue = document.getElementById('moviesSortSelect').value.split(',');
-        const filterValue = document.getElementById('moviesFilterSelect').value;
-        const genreValue = document.getElementById('moviesGenreSelect').value;
+        const sortValue = document.getElementById(`${section}SortSelect`).value.split(',');
+        const filterValue = document.getElementById(`${section}FilterSelect`).value;
+        const genreValue = document.getElementById(`${section}GenreSelect`).value;
 
         const params = new URLSearchParams({
           userId: this.currentUser.Id,
-          IncludeItemTypes: 'Movie',
+          IncludeItemTypes: itemType,
           Recursive: true,
           SortBy: sortValue[0],
           SortOrder: sortValue[1],
-          Fields: 'Overview,UserData,RunTimeTicks,ProductionYear,ImageTags,BackdropImageTags',
+          // The episode count, for series only: it tells which have nothing
+          // to play.
+          Fields: `Overview,UserData,RunTimeTicks,ProductionYear,ImageTags,BackdropImageTags${itemType === 'Series' ? ',RecursiveItemCount' : ''}`,
           EnableImageTypes: 'Primary,Backdrop,Thumb',
-          Limit: 50,
+          StartIndex: startIndex,
+          Limit: PAGE_SIZE,
         });
 
         if (filterValue === 'unwatched') {
@@ -316,72 +355,98 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           },
         });
 
-        if (!this.isLatestRequest('movies', requestId)) return;
+        if (!this.isLatestRequest(section, requestId)) return;
 
-        if (response.data && response.data.Items && response.data.Items.length > 0) {
-          this.renderMediaList(response.data.Items, container);
-        } else {
-          container.innerHTML = '<div class="empty-state">No movies found</div>';
-        }
+        this.renderPage(container, response, {
+          startIndex,
+          button,
+          emptyHtml: `<div class="empty-state">No ${section} found</div>`,
+          // A series without a single episode (an empty folder, or only
+          // metadata) has nothing to browse. Only a count the server gives
+          // as 0 hides it; without one the series stays.
+          filter: itemType === 'Series' ? (item) => item.RecursiveItemCount !== 0 : null,
+          render: (items, append) => this.renderMediaList(items, container, { append }),
+          loadMore: (next, nextButton) => this.loadLibraryPage(section, itemType, next, nextButton),
+        });
       } catch (error) {
-        debugLog('Error loading movies:', error);
-        if (!this.isLatestRequest('movies', requestId)) return;
-        container.innerHTML = '<div class="error">Failed to load movies</div>';
+        debugLog(`Error loading ${section}:`, error);
+        if (!this.isLatestRequest(section, requestId)) return;
+        this.pageFailed(container, button, `<div class="error">Failed to load ${section}</div>`);
       }
     },
 
-    async loadSeries() {
-      if (!this.currentServer || !this.currentUser) return;
+    /**
+     * The ticket for a page. A further page keeps the list's ticket, so
+     * changing a filter while it loads still drops its reply.
+     */
+    pageRequestId(key, button) {
+      if (button && this.requestIds && this.requestIds[key] !== undefined) {
+        return this.requestIds[key];
+      }
+      return this.nextRequestId(key);
+    },
 
-      const container = document.getElementById('seriesList');
-      container.innerHTML = '<div class="loading">Loading series...</div>';
-      const requestId = this.nextRequestId('series');
+    /**
+     * Show one page of a list. Jellyfin pages large libraries, so when it has
+     * more than are shown a "Load more" button fetches the next page.
+     *
+     * filter drops items from the display only: the paging still counts every
+     * item the server sent, or the next page would start in the wrong place.
+     * A page with nothing left to show loads the next one by itself.
+     */
+    renderPage(container, response, { startIndex, button, emptyHtml, filter, render, loadMore }) {
+      const data = response.data || {};
+      const items = Array.isArray(data.Items) ? data.Items : [];
+      if (button) button.remove();
 
-      try {
-        const sortValue = document.getElementById('seriesSortSelect').value.split(',');
-        const filterValue = document.getElementById('seriesFilterSelect').value;
-        const genreValue = document.getElementById('seriesGenreSelect').value;
+      if (items.length === 0) {
+        if (startIndex === 0) container.innerHTML = emptyHtml;
+        return;
+      }
 
-        const params = new URLSearchParams({
-          userId: this.currentUser.Id,
-          IncludeItemTypes: 'Series',
-          Recursive: true,
-          SortBy: sortValue[0],
-          SortOrder: sortValue[1],
-          Fields: 'Overview,UserData,RunTimeTicks,ProductionYear,ImageTags,BackdropImageTags',
-          EnableImageTypes: 'Primary,Backdrop,Thumb',
-          Limit: 50,
-        });
+      const visible = filter ? items.filter(filter) : items;
+      this.visibleCounts = this.visibleCounts || {};
+      const visibleSoFar =
+        (startIndex === 0 ? 0 : this.visibleCounts[container.id] || 0) + visible.length;
+      this.visibleCounts[container.id] = visibleSoFar;
 
-        if (filterValue === 'unwatched') {
-          params.append('IsPlayed', 'false');
-        } else if (filterValue === 'favorites') {
-          params.append('Filters', 'IsFavorite');
-        }
+      if (visible.length > 0) {
+        render(visible, startIndex > 0);
+      } else if (startIndex === 0) {
+        container.innerHTML = '';
+      }
 
-        if (genreValue !== 'all') {
-          params.append('Genres', genreValue);
-        }
+      const shown = startIndex + items.length;
+      const total = Number(data.TotalRecordCount);
+      const hasMore = Number.isFinite(total) ? total > shown : items.length >= PAGE_SIZE;
+      if (!hasMore) {
+        if (visibleSoFar === 0) container.innerHTML = emptyHtml;
+        return;
+      }
 
-        const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
+      const more = document.createElement('button');
+      more.className = 'button secondary load-more-btn';
+      more.textContent = Number.isFinite(total) ? `Load more (${shown} of ${total})` : 'Load more';
+      const loadNext = () => {
+        if (more.disabled) return;
+        more.disabled = true;
+        more.textContent = 'Loading...';
+        loadMore(shown, more);
+      };
+      more.addEventListener('click', (event) => {
+        event.stopPropagation();
+        loadNext();
+      });
+      container.appendChild(more);
+      if (visible.length === 0) loadNext();
+    },
 
-        const response = await this.getHttpClient().get(fullUrl, {
-          headers: {
-            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
-          },
-        });
-
-        if (!this.isLatestRequest('series', requestId)) return;
-
-        if (response.data && response.data.Items && response.data.Items.length > 0) {
-          this.renderMediaList(response.data.Items, container);
-        } else {
-          container.innerHTML = '<div class="empty-state">No series found</div>';
-        }
-      } catch (error) {
-        debugLog('Error loading series:', error);
-        if (!this.isLatestRequest('series', requestId)) return;
-        container.innerHTML = '<div class="error">Failed to load series</div>';
+    pageFailed(container, button, errorHtml) {
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'Failed to load more - try again';
+      } else {
+        container.innerHTML = errorHtml;
       }
     },
 
@@ -401,6 +466,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
     },
 
     async search(term) {
+      // Take the ticket before any early return: clearing the box or the type
+      // chips must also invalidate a search still in flight, or its slow reply
+      // would replace the prompt shown below.
+      const requestId = this.nextRequestId('search');
+
       if (!this.currentServer || !this.currentUser || !term.trim()) {
         document.getElementById('searchResults').innerHTML =
           '<div class="empty-state">Enter a search term above</div>';
@@ -417,7 +487,6 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
 
       searchResults.innerHTML = '<div class="loading">Searching...</div>';
-      const requestId = this.nextRequestId('search');
 
       try {
         const params = new URLSearchParams({
@@ -449,14 +518,14 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
     },
 
-    renderMediaList(items, container) {
+    renderMediaList(items, container, { append = false } = {}) {
       debugLog('renderMediaList called with ' + (items?.length || 0) + ' items');
       if (!items || items.length === 0) {
-        container.innerHTML = '<div class="empty-state">No items found</div>';
+        if (!append) container.innerHTML = '<div class="empty-state">No items found</div>';
         return;
       }
 
-      container.innerHTML = '';
+      if (!append) container.innerHTML = '';
       items.forEach((item) => {
         debugLog('Creating media item element for: ' + item.Name + ' ' + item.Type);
         const itemEl = this.createMediaItemElement(item);
@@ -481,25 +550,24 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
     getThumbnailUrl(item, maxWidth = 160) {
       if (!this.currentServer) return null;
       const base = this.currentServer.url;
-      const token = this.currentServer.accessToken;
 
       if (item.Type === 'Episode') {
         if (item.ImageTags && item.ImageTags.Primary) {
-          return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
+          return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90`;
         }
         if (item.SeriesId) {
-          return `${base}/Items/${item.SeriesId}/Images/Thumb?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
+          return `${base}/Items/${item.SeriesId}/Images/Thumb?maxWidth=${maxWidth}&quality=90`;
         }
       }
 
       if (item.ImageTags && item.ImageTags.Thumb) {
-        return `${base}/Items/${item.Id}/Images/Thumb?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
+        return `${base}/Items/${item.Id}/Images/Thumb?maxWidth=${maxWidth}&quality=90`;
       }
       if (item.ImageTags && item.ImageTags.Primary) {
-        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
+        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90`;
       }
       if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&ApiKey=${token}`;
+        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90`;
       }
       return null;
     },
@@ -507,6 +575,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
     formatRuntime(ticks) {
       if (!ticks) return '';
       const totalMinutes = Math.floor(ticks / 600000000);
+      // Anything under a minute (a short track, an intro) would read "0m".
+      if (totalMinutes === 0) return `${Math.max(1, Math.floor(ticks / 10000000))}s`;
       const hours = Math.floor(totalMinutes / 60);
       const minutes = totalMinutes % 60;
       if (hours > 0) return `${hours}h ${minutes}m`;
@@ -607,13 +677,12 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       let thumbUrl = null;
       if (this.currentServer) {
         const base = this.currentServer.url;
-        const token = this.currentServer.accessToken;
         if (hint.ThumbImageTag && hint.ThumbImageItemId) {
-          thumbUrl = `${base}/Items/${hint.ThumbImageItemId}/Images/Thumb?maxWidth=160&quality=90&ApiKey=${token}`;
+          thumbUrl = `${base}/Items/${hint.ThumbImageItemId}/Images/Thumb?maxWidth=160&quality=90`;
         } else if (hint.PrimaryImageTag) {
-          thumbUrl = `${base}/Items/${hint.ItemId}/Images/Primary?maxWidth=160&quality=90&ApiKey=${token}`;
+          thumbUrl = `${base}/Items/${hint.ItemId}/Images/Primary?maxWidth=160&quality=90`;
         } else if (hint.BackdropImageTag && hint.BackdropImageItemId) {
-          thumbUrl = `${base}/Items/${hint.BackdropImageItemId}/Images/Backdrop?maxWidth=320&quality=90&ApiKey=${token}`;
+          thumbUrl = `${base}/Items/${hint.BackdropImageItemId}/Images/Backdrop?maxWidth=320&quality=90`;
         }
       }
 
@@ -678,10 +747,14 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         name: item?.Name,
       });
       this.selectedItem = item;
+      // A search result still being looked up must not replace this choice.
+      this.nextRequestId('searchItem');
 
       document.querySelectorAll('.media-item').forEach((el) => el.classList.remove('selected'));
       // The item is not always on screen (e.g. selected from search results)
-      const selectedEl = document.querySelector(`[data-item-id="${item.Id}"]`);
+      // Escaped so an id with a quote or backslash cannot break the selector.
+      const quotedId = String(item.Id).replace(/["\\]/g, '\\$&');
+      const selectedEl = document.querySelector(`[data-item-id="${quotedId}"]`);
       if (selectedEl) {
         selectedEl.classList.add('selected');
       }
@@ -699,6 +772,10 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
     },
 
     async selectSearchItem(hint) {
+      // A result chosen before signing out or switching server must not
+      // start playing once its slow reply arrives.
+      const requestId = this.nextRequestId('searchItem');
+
       try {
         const params = new URLSearchParams({
           userId: this.currentUser.Id,
@@ -713,10 +790,13 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           }
         );
 
+        if (!this.isLatestRequest('searchItem', requestId)) return;
+
         if (response.data) {
           this.selectMediaItem(response.data);
         }
       } catch (error) {
+        if (!this.isLatestRequest('searchItem', requestId)) return;
         // The webview has no core API — iina here only exposes postMessage and
         // onMessage — so report failures in the UI, not through an OSD.
         debugLog('Error getting item details:', error);
@@ -836,11 +916,10 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
             let episodeThumbUrl = null;
             if (this.currentServer) {
               const base = this.currentServer.url;
-              const token = this.currentServer.accessToken;
               if (episode.ImageTags && episode.ImageTags.Primary) {
-                episodeThumbUrl = `${base}/Items/${episode.Id}/Images/Primary?maxWidth=120&quality=90&ApiKey=${token}`;
+                episodeThumbUrl = `${base}/Items/${episode.Id}/Images/Primary?maxWidth=120&quality=90`;
               } else if (this.selectedItem && this.selectedItem.Id) {
-                episodeThumbUrl = `${base}/Items/${this.selectedItem.Id}/Images/Thumb?maxWidth=120&quality=90&ApiKey=${token}`;
+                episodeThumbUrl = `${base}/Items/${this.selectedItem.Id}/Images/Thumb?maxWidth=120&quality=90`;
               }
             }
 
@@ -920,6 +999,25 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       document.getElementById('seasonSelect').innerHTML = '';
     },
 
+    /**
+     * The item's details page in Jellyfin's web client. 10.9 moved its routes
+     * from "#!/" to "#/" and only redirects the old form as deprecated, while
+     * 10.8 and older only know "#!/". The serverId tells the web client which
+     * of its servers the item is on.
+     */
+    buildJellyfinWebUrl(item) {
+      const server = this.currentServer;
+      const [major, minor] = String(server.version || '')
+        .split('.')
+        .map(Number);
+      const modern = major > 10 || (major === 10 && minor >= 9);
+      const params = [`id=${encodeURIComponent(item.Id)}`];
+      if (server.jellyfinServerId) {
+        params.push(`serverId=${encodeURIComponent(server.jellyfinServerId)}`);
+      }
+      return `${server.url}/web/index.html#${modern ? '' : '!'}/details?${params.join('&')}`;
+    },
+
     openInJellyfin(item) {
       if (!this.currentServer || !item) {
         debugLog('Cannot open in Jellyfin: missing server or item');
@@ -938,7 +1036,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         debugLog('Item details:', item);
         debugLog('Server details:', this.currentServer);
 
-        const jellyfinUrl = `${this.currentServer.url}/web/index.html#!/details?id=${item.Id}`;
+        const jellyfinUrl = this.buildJellyfinWebUrl(item);
 
         debugLog(`Constructed Jellyfin URL: ${jellyfinUrl}`);
         debugLog('Using IINA postMessage API to open URL in default browser');
@@ -992,132 +1090,96 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
     },
 
-    async loadMusic() {
+    /**
+     * One page of the Music tab in its current view (albums, artists or
+     * songs). Page 1 replaces the list; later pages come from "Load more".
+     */
+    async loadMusic(startIndex = 0, button = null) {
       if (!this.currentServer || !this.currentUser) return;
 
       const container = document.getElementById('musicList');
-      container.innerHTML = '<div class="loading">Loading music...</div>';
-      const requestId = this.nextRequestId('music');
+      if (!button) container.innerHTML = '<div class="loading">Loading music...</div>';
+      const requestId = this.pageRequestId('music', button);
 
       try {
         const viewMode = document.getElementById('musicViewSelect').value;
         const sortValue = document.getElementById('musicSortSelect').value.split(',');
         const genreValue = document.getElementById('musicGenreSelect').value;
 
-        if (viewMode === 'artists') {
-          await this.loadMusicArtists(container, sortValue, genreValue, requestId);
-        } else if (viewMode === 'songs') {
-          await this.loadMusicSongs(container, sortValue, genreValue, requestId);
-        } else {
-          await this.loadMusicAlbums(container, sortValue, genreValue, requestId);
+        const views = {
+          artists: {
+            path: 'Artists',
+            viewType: 'artist',
+            empty: 'No artists found',
+            params: { Fields: 'Overview,UserData,ImageTags,BackdropImageTags' },
+          },
+          songs: {
+            path: 'Items',
+            viewType: 'song',
+            empty: 'No songs found',
+            params: {
+              IncludeItemTypes: 'Audio',
+              Recursive: true,
+              Fields:
+                'Overview,UserData,RunTimeTicks,ProductionYear,ImageTags,AlbumArtist,Album,AlbumId',
+            },
+          },
+          albums: {
+            path: 'Items',
+            viewType: 'album',
+            empty: 'No albums found',
+            params: {
+              IncludeItemTypes: 'MusicAlbum',
+              Recursive: true,
+              Fields:
+                'Overview,UserData,RunTimeTicks,ProductionYear,ImageTags,BackdropImageTags,AlbumArtist,ChildCount',
+            },
+          },
+        };
+        const view = views[viewMode] || views.albums;
+
+        const params = new URLSearchParams({
+          userId: this.currentUser.Id,
+          ...view.params,
+          SortBy: sortValue[0],
+          SortOrder: sortValue[1],
+          EnableImageTypes: 'Primary',
+          StartIndex: startIndex,
+          Limit: PAGE_SIZE,
+        });
+
+        if (genreValue !== 'all') {
+          params.append('Genres', genreValue);
         }
+
+        const fullUrl = `${this.currentServer.url}/${view.path}?${params.toString()}`;
+
+        const response = await this.getHttpClient().get(fullUrl, {
+          headers: {
+            Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
+          },
+        });
+
+        if (!this.isLatestRequest('music', requestId)) return;
+
+        this.renderPage(container, response, {
+          startIndex,
+          button,
+          emptyHtml: `<div class="empty-state">${view.empty}</div>`,
+          render: (items, append) =>
+            this.renderMusicList(items, container, view.viewType, { append }),
+          loadMore: (next, nextButton) => this.loadMusic(next, nextButton),
+        });
       } catch (error) {
         debugLog('Error loading music:', error);
         if (!this.isLatestRequest('music', requestId)) return;
-        container.innerHTML = '<div class="error">Failed to load music</div>';
-      }
-    },
-
-    async loadMusicAlbums(container, sortValue, genreValue, requestId) {
-      const params = new URLSearchParams({
-        userId: this.currentUser.Id,
-        IncludeItemTypes: 'MusicAlbum',
-        Recursive: true,
-        SortBy: sortValue[0],
-        SortOrder: sortValue[1],
-        Fields:
-          'Overview,UserData,RunTimeTicks,ProductionYear,ImageTags,BackdropImageTags,AlbumArtist,ChildCount',
-        EnableImageTypes: 'Primary',
-        Limit: 50,
-      });
-
-      if (genreValue !== 'all') {
-        params.append('Genres', genreValue);
-      }
-
-      const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
-
-      const response = await this.getHttpClient().get(fullUrl, {
-        headers: {
-          Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
-        },
-      });
-
-      if (!this.isLatestRequest('music', requestId)) return;
-
-      if (response.data && response.data.Items && response.data.Items.length > 0) {
-        this.renderMusicList(response.data.Items, container, 'album');
-      } else {
-        container.innerHTML = '<div class="empty-state">No albums found</div>';
-      }
-    },
-
-    async loadMusicArtists(container, sortValue, genreValue, requestId) {
-      const params = new URLSearchParams({
-        userId: this.currentUser.Id,
-        SortBy: sortValue[0],
-        SortOrder: sortValue[1],
-        Fields: 'Overview,UserData,ImageTags,BackdropImageTags',
-        EnableImageTypes: 'Primary',
-        Limit: 50,
-      });
-
-      if (genreValue !== 'all') {
-        params.append('Genres', genreValue);
-      }
-
-      const fullUrl = `${this.currentServer.url}/Artists?${params.toString()}`;
-
-      const response = await this.getHttpClient().get(fullUrl, {
-        headers: {
-          Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
-        },
-      });
-
-      if (!this.isLatestRequest('music', requestId)) return;
-
-      if (response.data && response.data.Items && response.data.Items.length > 0) {
-        this.renderMusicList(response.data.Items, container, 'artist');
-      } else {
-        container.innerHTML = '<div class="empty-state">No artists found</div>';
-      }
-    },
-
-    async loadMusicSongs(container, sortValue, genreValue, requestId) {
-      const params = new URLSearchParams({
-        userId: this.currentUser.Id,
-        IncludeItemTypes: 'Audio',
-        Recursive: true,
-        SortBy: sortValue[0],
-        SortOrder: sortValue[1],
-        Fields: 'Overview,UserData,RunTimeTicks,ProductionYear,ImageTags,AlbumArtist,Album,AlbumId',
-        EnableImageTypes: 'Primary',
-        Limit: 50,
-      });
-
-      if (genreValue !== 'all') {
-        params.append('Genres', genreValue);
-      }
-
-      const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
-
-      const response = await this.getHttpClient().get(fullUrl, {
-        headers: {
-          Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
-        },
-      });
-
-      if (!this.isLatestRequest('music', requestId)) return;
-
-      if (response.data && response.data.Items && response.data.Items.length > 0) {
-        this.renderMusicList(response.data.Items, container, 'song');
-      } else {
-        container.innerHTML = '<div class="empty-state">No songs found</div>';
+        this.pageFailed(container, button, '<div class="error">Failed to load music</div>');
       }
     },
 
     async loadMusicGenres() {
       if (!this.currentServer || !this.currentUser) return;
+      const requestId = this.nextRequestId('musicGenres');
 
       try {
         const params = new URLSearchParams({
@@ -1132,6 +1194,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
             Authorization: this.buildAuthorizationHeader(this.currentServer.accessToken),
           },
         });
+
+        if (!this.isLatestRequest('musicGenres', requestId)) return;
 
         if (response.data && response.data.Items) {
           const musicGenreSelect = document.getElementById('musicGenreSelect');
@@ -1152,28 +1216,27 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
     getMusicThumbnailUrl(item, maxWidth = 96) {
       if (!this.currentServer) return null;
       const base = this.currentServer.url;
-      const token = this.currentServer.accessToken;
 
       if (item.ImageTags && item.ImageTags.Primary) {
-        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
+        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90`;
       }
       if (item.AlbumId) {
-        return `${base}/Items/${item.AlbumId}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
+        return `${base}/Items/${item.AlbumId}/Images/Primary?maxWidth=${maxWidth}&quality=90`;
       }
       if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&ApiKey=${token}`;
+        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90`;
       }
       return null;
     },
 
-    renderMusicList(items, container, viewType) {
+    renderMusicList(items, container, viewType, { append = false } = {}) {
       debugLog('renderMusicList called with ' + (items?.length || 0) + ' items, view: ' + viewType);
       if (!items || items.length === 0) {
-        container.innerHTML = '<div class="empty-state">No items found</div>';
+        if (!append) container.innerHTML = '<div class="empty-state">No items found</div>';
         return;
       }
 
-      container.innerHTML = '';
+      if (!append) container.innerHTML = '';
       items.forEach((item) => {
         const itemEl = this.createMusicItemElement(item, viewType);
         container.appendChild(itemEl);
@@ -1274,12 +1337,12 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
     },
 
-    async showArtistAlbums(artist) {
+    async showArtistAlbums(artist, startIndex = 0, button = null) {
       if (!this.currentServer || !this.currentUser) return;
 
       const container = document.getElementById('musicList');
-      container.innerHTML = '<div class="loading">Loading albums...</div>';
-      const requestId = this.nextRequestId('music');
+      if (!button) container.innerHTML = '<div class="loading">Loading albums...</div>';
+      const requestId = this.pageRequestId('music', button);
 
       try {
         const params = new URLSearchParams({
@@ -1291,7 +1354,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           AlbumArtistIds: artist.Id,
           Fields: 'Overview,UserData,RunTimeTicks,ProductionYear,ImageTags,AlbumArtist,ChildCount',
           EnableImageTypes: 'Primary',
-          Limit: 50,
+          StartIndex: startIndex,
+          Limit: PAGE_SIZE,
         });
 
         const fullUrl = `${this.currentServer.url}/Items?${params.toString()}`;
@@ -1304,15 +1368,17 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
         if (!this.isLatestRequest('music', requestId)) return;
 
-        if (response.data && response.data.Items && response.data.Items.length > 0) {
-          this.renderMusicList(response.data.Items, container, 'album');
-        } else {
-          container.innerHTML = `<div class="empty-state">No albums found for ${this.escapeHtml(artist.Name)}</div>`;
-        }
+        this.renderPage(container, response, {
+          startIndex,
+          button,
+          emptyHtml: `<div class="empty-state">No albums found for ${this.escapeHtml(artist.Name)}</div>`,
+          render: (items, append) => this.renderMusicList(items, container, 'album', { append }),
+          loadMore: (next, nextButton) => this.showArtistAlbums(artist, next, nextButton),
+        });
       } catch (error) {
         debugLog('Error loading artist albums:', error);
         if (!this.isLatestRequest('music', requestId)) return;
-        container.innerHTML = '<div class="error">Failed to load albums</div>';
+        this.pageFailed(container, button, '<div class="error">Failed to load albums</div>');
       }
     },
 
@@ -1457,7 +1523,30 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
     buildStreamUrl(item) {
       if (!this.currentServer || !item || !item.Id) return null;
       const route = item.Type === 'Audio' ? 'Audio' : 'Videos';
-      return `${this.currentServer.url}/${route}/${item.Id}/stream?static=true&ApiKey=${this.currentServer.accessToken}`;
+      return `${this.currentServer.url}/${route}/${item.Id}/stream?static=true&ApiKey=${encodeURIComponent(this.currentServer.accessToken)}`;
+    },
+
+    /**
+     * The title the player shows, in the plugin's own format (see
+     * titleFromMetadata in media-actions.js). mpv names the playlist entry
+     * after the first title it sees, so an episode sent by name alone would
+     * stay just "Pilot" in the playlist.
+     */
+    mediaTitle(item) {
+      const name = item.Name || 'Unknown Title';
+      const isNumber = (value) => value !== undefined && value !== null;
+      if (item.Type === 'Episode' && item.SeriesName) {
+        let title = item.SeriesName;
+        if (isNumber(item.ParentIndexNumber) && isNumber(item.IndexNumber)) {
+          const pad = (value) => String(value).padStart(2, '0');
+          title += ` S${pad(item.ParentIndexNumber)}E${pad(item.IndexNumber)}`;
+        }
+        return `${title} - ${name}`;
+      }
+      if (item.Type === 'Movie' && item.ProductionYear) {
+        return `${name} (${item.ProductionYear})`;
+      }
+      return name;
     },
 
     async playMedia(item) {
@@ -1481,10 +1570,14 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           debugLog('Sending play-media message to main plugin');
           iina.postMessage('play-media', {
             streamUrl: streamUrl,
-            title: item.Name || 'Unknown Title',
+            title: this.mediaTitle(item),
           });
 
-          if (document.getElementById('episodeSection').style.display !== 'none') {
+          // The section is hidden by CSS, so its inline style starts empty;
+          // only showEpisodeSelection() sets it to 'block'. Checking for
+          // !== 'none' would treat a never-opened picker as open and bring
+          // the main list back over the album tracks.
+          if (document.getElementById('episodeSection').style.display === 'block') {
             this.hideEpisodeSelection();
           }
         } else {

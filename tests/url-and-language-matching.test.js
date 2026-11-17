@@ -9,7 +9,7 @@ function createSubtitleHarness(languages, prefs = {}) {
   const downloads = [];
   const values = { preferred_languages: 'en,eng', download_all_subtitles: false, ...prefs };
   const manager = createMediaActionsManager({
-    core: { osd() {}, subtitle: { loadTrack() {} } },
+    core: { osd() {} },
     http: {
       async download(url) {
         downloads.push(url);
@@ -17,7 +17,7 @@ function createSubtitleHarness(languages, prefs = {}) {
     },
     utils: { resolvePath: (path) => path },
     preferences: { get: (key) => values[key] },
-    mpv: {},
+    mpv: { getNative: () => [], getString: () => '', command() {}, set() {} },
     parseJellyfinUrl() {},
     isJellyfinUrl() {},
     async fetchPlaybackInfo() {
@@ -72,9 +72,33 @@ test('Norwegian preferences match the right variants', async () => {
   assert.deepEqual(downloadedIndexes(nynorsk.downloads), [1, 2]);
 });
 
-test('codes outside the table match the 3-letter code they start', async () => {
-  const { manager, downloads } = createSubtitleHarness(['swa', 'afr', 'tat', 'ben'], {
-    preferred_languages: 'sw,af,ta',
+test('2-letter codes match their 3-letter codes, even ones they do not start', async () => {
+  const { manager, downloads } = createSubtitleHarness(['swa', 'afr', 'tat', 'ben', 'khm', 'pus'], {
+    preferred_languages: 'sw,af,ta,km,ps',
+  });
+  await manager.downloadAllSubtitles('https://jf.example', 'item', 'key');
+  assert.deepEqual(downloadedIndexes(downloads), [0, 1, 4, 5]);
+});
+
+test('a 2-letter code does not match an unrelated code it happens to start', async () => {
+  const { manager, downloads } = createSubtitleHarness(['pap', 'pan'], {
+    preferred_languages: 'pa',
+  });
+  await manager.downloadAllSubtitles('https://jf.example', 'item', 'key');
+  assert.deepEqual(downloadedIndexes(downloads), [1]);
+});
+
+test('macrolanguage members tagged with ISO 639-3 codes match', async () => {
+  const { manager, downloads } = createSubtitleHarness(['swh', 'uzn', 'azj', 'quz'], {
+    preferred_languages: 'sw,uz,az,qu',
+  });
+  await manager.downloadAllSubtitles('https://jf.example', 'item', 'key');
+  assert.deepEqual(downloadedIndexes(downloads), [0, 1, 2, 3]);
+});
+
+test('nonstandard codes outside the table still match the 3-letter code they start', async () => {
+  const { manager, downloads } = createSubtitleHarness(['xyz', 'xya'], {
+    preferred_languages: 'xy',
   });
   await manager.downloadAllSubtitles('https://jf.example', 'item', 'key');
   assert.deepEqual(downloadedIndexes(downloads), [0, 1]);
@@ -147,12 +171,18 @@ test('scheme, case and trailing slashes do not split one server', () => {
 });
 
 test('an error status from Jellyfin is a failed request, not data', async () => {
-  const api = createJellyfinApi({
+  const failingApi = createJellyfinApi({
     http: { get: async () => ({ statusCode: 500, data: { message: 'Internal error' } }) },
     preferences: { get: () => 'device', set() {}, sync() {} },
     log() {},
   });
 
-  await assert.rejects(api.fetchItemMetadata('https://jf', 'item', 'key'), /status 500/);
-  await assert.rejects(api.fetchPlaybackInfo('https://jf', 'item', 'key'), /status 500/);
+  await assert.rejects(failingApi.fetchItemMetadata('https://jf', 'item', 'key'), /status 500/);
+  await assert.rejects(failingApi.fetchPlaybackInfo('https://jf', 'item', 'key'), /status 500/);
+});
+
+test('the version playing is read from the MediaSourceId parameter', () => {
+  const base = 'https://jf.example/Videos/item/stream?static=true&ApiKey=K';
+  assert.equal(api.parseJellyfinUrl(`${base}&mediaSourceId=abc`).mediaSourceId, 'abc');
+  assert.equal(api.parseJellyfinUrl(base).mediaSourceId, null);
 });

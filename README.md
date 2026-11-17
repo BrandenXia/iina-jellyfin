@@ -1,8 +1,25 @@
+<div align="center">
+
 # IINA Jellyfin Plugin
 
-An comprehensive IINA plugin that provides Jellyfin media server integration, including automatic subtitle downloading and a full media browser sidebar.
+**Browse your Jellyfin library, play it, get subtitles and sync progress, all inside IINA on macOS**
 
-## Features
+[![Release](https://img.shields.io/github/v/release/mhajder/iina-jellyfin?logo=github)](https://github.com/mhajder/iina-jellyfin/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/mhajder/iina-jellyfin/total?logo=github)](https://github.com/mhajder/iina-jellyfin/releases)
+[![License](https://img.shields.io/github/license/mhajder/iina-jellyfin)](https://github.com/mhajder/iina-jellyfin/blob/main/LICENSE)
+[![Pre-commit Checks](https://github.com/mhajder/iina-jellyfin/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/mhajder/iina-jellyfin/actions/workflows/pre-commit.yml)
+
+[![IINA plugin](https://img.shields.io/badge/IINA-plugin-6E40C9?logo=apple&logoColor=white)](https://iina.io/)
+[![Jellyfin](https://img.shields.io/badge/Jellyfin-client-00A4DC?logo=jellyfin&logoColor=white)](https://jellyfin.org/)
+[![Stars](https://img.shields.io/github/stars/mhajder/iina-jellyfin?style=flat&logo=github)](https://github.com/mhajder/iina-jellyfin/stargazers)
+
+[Installation](https://github.com/mhajder/iina-jellyfin#-installation) · [Getting started](https://github.com/mhajder/iina-jellyfin#-getting-started) · [Configuration](https://github.com/mhajder/iina-jellyfin#-configuration) · [Contributing](https://github.com/mhajder/iina-jellyfin#-contributing)
+
+</div>
+
+A comprehensive IINA plugin that provides Jellyfin media server integration, including automatic subtitle downloading and a full media browser sidebar.
+
+## ✨ Features
 
 ### Subtitle Management
 
@@ -40,8 +57,9 @@ An comprehensive IINA plugin that provides Jellyfin media server integration, in
 - **On-screen notifications**: Optional OSD messages to keep you informed
 - **Keyboard shortcuts**: Quick access to browser sidebar (Cmd+Shift+J)
 - **Autoplay support**: Automatically queues the next episode in a series when available, with cross-season support
+- **Version switching**: For items with several versions in Jellyfin (e.g. 4K and 1080p files), switch between them during playback from the plugin menu, keeping your position
 
-## Installation
+## 📦 Installation
 
 1. Open IINA
 2. Go to Preferences → Plugins
@@ -49,7 +67,7 @@ An comprehensive IINA plugin that provides Jellyfin media server integration, in
 4. Paste `mhajder/iina-jellyfin` and click Install
 5. The plugin will appear in IINA's Plugin preferences
 
-## Getting Started
+## 🎬 Getting Started
 
 ### Automatic Subtitle Downloading
 
@@ -58,7 +76,7 @@ The plugin automatically detects and downloads subtitles when you open Jellyfin 
 1. Copy a Jellyfin media URL (e.g., from a Jellyfin download link containing `/Items/` and `ApiKey=`)
 2. Open the URL in IINA using File → Open URL
 3. Subtitles will be downloaded automatically based on your language preferences
-4. Manually download subtitles anytime using: Menu → "Download Jellyfin Subtitles" (or `Cmd+Shift+D`)
+4. Manually download subtitles anytime using: Plugin → "Download Jellyfin Subtitles"
 
 ### Using the Jellyfin Browser Sidebar
 
@@ -149,7 +167,7 @@ The Movies and TV Series tabs include powerful filtering and sorting tools to he
 
 Click the "Filter/Sort" button in the Movies or TV Series tab header to toggle the filter panel and customize your view.
 
-## Supported URL Formats
+## 🔗 Supported URL Formats
 
 The plugin automatically detects and processes Jellyfin URLs in these formats:
 
@@ -159,29 +177,37 @@ The plugin automatically detects and processes Jellyfin URLs in these formats:
 
 **Note**: URLs with API keys will automatically store authentication data for the sidebar browser, eliminating the need for manual login on first use.
 
-## Configuration
+## 🔧 Configuration
 
-Access plugin settings through IINA → Preferences → Plugins → Jellyfin:
+Access plugin settings through IINA → Settings → Plugins → Jellyfin. They are grouped the same way there:
 
-### Authentication Settings
+### Playback
 
-- **Enable automatic login from Jellyfin URLs**: Automatically extract server URL and API key from Jellyfin URLs for seamless login. Server credentials are stored permanently in your plugin preferences until manually removed via the sidebar server management panel.
+- **Open media in a new IINA window**: Play what you pick in the Jellyfin browser in a separate window, so you can keep browsing.
+- **Show the Jellyfin title**: Show the movie or episode title from Jellyfin instead of the file name from the stream URL
+- **Autoplay the next episode**: Queue the next episode while one plays, continuing into the next season
 
-### Media Playback Settings
+### Languages & Subtitles
 
-- **Enable automatic subtitle download**: Toggle automatic downloading when opening Jellyfin URLs
-- **Synchronize playback progress**: Enable bi-directional progress sync with Jellyfin server
-  - Automatically resumes from last watched position when opening a video
-  - Reports current playback position to Jellyfin every 10 seconds
-  - Automatically marks items as watched at 95% completion
-  - Resume positions sync across all your devices
-- **Report to my connected account (ignore link's API key)**: When enabled, playback progress, resume, and watched status are reported to the Jellyfin account you're logged into via the browser sidebar, instead of the account whose `api_key` is embedded in the playing URL. Useful when several people open the same shared link (e.g. via Syncplay) — each viewer's progress records into their own account. Requires a logged-in server; falls back to the URL's `api_key` if none is connected.
-- **Show on-screen notifications**: Display OSD messages when subtitles are downloaded
-- **Preferred Languages**: Comma-separated language codes (e.g., `en,eng,pol,pl`)
-- **Download all available subtitles**: Download all subtitle tracks, ignoring language preferences
-- **Set video title from Jellyfin metadata**: Replace filenames with proper movie/show titles
-- **Open media in new IINA window**: Play media from browser in separate windows
-- **Enable autoplay**: Automatically queue the next episode when the current episode finishes, supporting cross-season playback
+- **Preferred languages**: Comma-separated language codes, most preferred first (e.g. `pol,eng`). 2- and 3-letter codes both work. Used for subtitle downloads and track selection.
+- **Pick audio and subtitles in my languages**: When playback starts, switch to the audio in your most preferred language (never a commentary or audio description). Unless **Always show subtitles** is on, full subtitles are turned on only when the audio is not in a language you rank higher, otherwise just a signs/songs track in the audio's language, and downloaded subtitles are ranked the same way. Preferred audio/subtitle languages set in IINA's own settings take precedence. Jellyfin direct-play hands mpv the original file, so without this mpv keeps the container's default tracks — usually the original language.
+  - **Always show subtitles**: Also turn on full subtitles in the audio's own language; subtitles in a language you rank below the audio's stay off. Has no effect when a preferred subtitle language is set in IINA's own settings.
+- **Download subtitles automatically**: Download the item's external subtitle files in your preferred languages when Jellyfin media opens
+- **Download subtitles in every language**: Ignore the preferred languages when downloading external subtitles
+
+### Progress & Account
+
+- **Sync playback progress with Jellyfin**:
+  - Resumes from the last watched position when opening a video
+  - Reports the current position to Jellyfin every 10 seconds
+  - Marks items as watched at 95% completion
+- **Report to my signed-in account, not the link's**: Record progress, resume and watched status in the Jellyfin account you signed into in the browser, instead of the account whose `api_key` is in the playing URL. Useful when several people open the same shared link (e.g. via Syncplay) — each viewer's progress records into their own account. Falls back to the URL's `api_key` when you are not signed in to that server.
+- **Sign in from Jellyfin links**: When you open a Jellyfin link that contains an API key, save that server so the browser signs in automatically. Saved servers stay until you remove them in the browser.
+
+### Notifications & Troubleshooting
+
+- **Show subtitle notifications**: Show an on-screen message when subtitles are downloaded, when none match, or when the download fails
+- **Debug logging**: Write detailed logs to IINA's log for troubleshooting and bug reports; API keys and tokens are removed
 
 ### Menu Options
 
@@ -190,23 +216,30 @@ The plugin adds these menu items to IINA:
 - **Show Jellyfin Browser** (`Cmd+Shift+J`): Open the media browser sidebar
 - **Download Jellyfin Subtitles**: Manually download subtitles for current media
 - **Set Jellyfin Title**: Manually set video title from Jellyfin metadata
+- **Jellyfin Version**: Shown when the playing item has more than one version; lists each one (name, video format and bitrate) and reopens the item in the chosen version at the current position
 
-## Development
+## 🔨 Development
 
-### Development Scripts
+```sh
+pnpm install
+prek install
+/Applications/IINA.app/Contents/MacOS/iina-plugin link .
+```
 
-- `pnpm run check`: Run ESLint and Prettier checks
-- `pnpm run lint`: Run ESLint
-- `pnpm run lint:fix`: Auto-fix ESLint issues
-- `pnpm run format`: Check Prettier formatting
-- `pnpm run format:fix`: Auto-fix Prettier formatting
-- `/Applications/IINA.app/Contents/MacOS/iina-plugin link .`: Link plugin to IINA for testing
-- `/Applications/IINA.app/Contents/MacOS/iina-plugin unlink .`: Unlink plugin from IINA
+| Command                | What it does                   |
+| ---------------------- | ------------------------------ |
+| `pnpm test`            | Run the tests in `tests/`      |
+| `pnpm run check`       | Run ESLint and Prettier checks |
+| `pnpm run lint:fix`    | Auto-fix ESLint issues         |
+| `pnpm run format:fix`  | Auto-fix Prettier formatting   |
+| `iina-plugin unlink .` | Unlink the plugin from IINA    |
 
-## Contributing
+## 🤝 Contributing
 
-Feel free to submit issues and pull requests to improve the plugin functionality.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](https://github.com/mhajder/iina-jellyfin/blob/main/CONTRIBUTING.md) for the dev setup, checks and commit message format.
 
-## License
+Found a security problem? Please report it privately as described in [SECURITY.md](https://github.com/mhajder/iina-jellyfin/blob/main/SECURITY.md).
 
-GNU Affero General Public License - see [LICENSE](LICENSE) file for details.
+## 📜 License
+
+GNU General Public License v3.0 only - see [LICENSE](https://github.com/mhajder/iina-jellyfin/blob/main/LICENSE) for details.
